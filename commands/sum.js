@@ -1,85 +1,44 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const cache = require('../cache');
 
-/* ------------------ COLOR ------------------ */
-function getColorByValue(value) {
-    if (value >= 1_000_000_000) return 0xFFD700;
-    if (value >= 100_000_000) return 0x0099FF;
-    if (value >= 10_000_000) return 0x00FF00;
-    return 0x808080;
-}
-
-/* ------------------ LEVENSHTEIN ------------------ */
-function levenshtein(a, b) {
-    const matrix = [];
-    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
-    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
-
-    for (let i = 1; i <= b.length; i++) {
-        for (let j = 1; j <= a.length; j++) {
-            if (b[i - 1] === a[j - 1]) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1,
-                    matrix[i][j - 1] + 1,
-                    matrix[i - 1][j] + 1
-                );
-            }
-        }
-    }
-
-    return matrix[b.length][a.length];
-}
-
-/* ------------------ HYBRID MATCH ------------------ */
-function findBestMatch(itemsList, input) {
-    const normalized = input.toLowerCase().trim();
-
-    // Exact
-    const exact = itemsList.find(i => i.name.toLowerCase() === normalized);
-    if (exact) return exact;
-
-    // Partial
-    const partial = itemsList.filter(i =>
-        i.name.toLowerCase().includes(normalized)
-    );
-    if (partial.length === 1) return partial[0];
-    if (partial.length > 1) return partial[0];
-
-    // Light fuzzy
-    if (normalized.length < 4) return null;
-
-    let best = null;
-    let bestScore = Infinity;
-
-    for (const item of itemsList) {
-        const score = levenshtein(normalized, item.name.toLowerCase());
-        if (score < bestScore) {
-            bestScore = score;
-            best = item;
-        }
-    }
-
-    const max = Math.floor(normalized.length * 0.3);
-    return bestScore <= max ? best : null;
+/* ------------------ AUTOCOMPLETE HELPER ------------------ */
+function getLastEntry(input) {
+    const parts = input.split(',');
+    return parts[parts.length - 1].trim().toLowerCase();
 }
 
 /* ------------------ GP PARSER ------------------ */
 function parseGP(value) {
     const input = value.toLowerCase().trim();
-
-    if (/^\d+(\.\d+)?b$/.test(input)) return parseFloat(input) * 1_000_000_000;
-    if (/^\d+(\.\d+)?m$/.test(input)) return parseFloat(input) * 1_000_000;
-    if (/^\d+(\.\d+)?k$/.test(input)) return parseFloat(input) * 1_000;
+    if (/^\d+(\.\d+)?b$/.test(input)) return parseFloat(input) * 1e9;
+    if (/^\d+(\.\d+)?m$/.test(input)) return parseFloat(input) * 1e6;
+    if (/^\d+(\.\d+)?k$/.test(input)) return parseFloat(input) * 1e3;
     if (/^\d+$/.test(input)) return parseInt(input);
+    return null;
+}
+
+/* ------------------ MATCH ------------------ */
+function findBestMatch(itemsList, input) {
+    const normalized = input.toLowerCase();
+
+    const exact = itemsList.find(i => i.name.toLowerCase() === normalized);
+    if (exact) return exact;
+
+    const partial = itemsList.filter(i =>
+        i.name.toLowerCase().includes(normalized)
+    );
+
+    if (partial.length) return partial[0];
 
     return null;
 }
 
-/* ------------------ ICON ------------------ */
-function getItemIcon(name) {
-    return `https://oldschool.runescape.wiki/images/${name.replace(/ /g, '_')}.png`;
+/* ------------------ COLOR ------------------ */
+function getColorByValue(value) {
+    if (value >= 1e9) return 0xFFD700;
+    if (value >= 100e6) return 0x0099FF;
+    if (value >= 10e6) return 0x00FF00;
+    return 0x808080;
 }
 
 /* ------------------ COMMAND ------------------ */
@@ -87,13 +46,43 @@ function getItemIcon(name) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('sumitems')
-        .setDescription('Sum OSRS items + GP using cached prices')
+        .setDescription('Sum OSRS items + GP')
         .addStringOption(option =>
             option.setName('items')
-                .setDescription('item:qty, item, 10m, 500k')
+                .setDescription('item:qty, item, 10m')
                 .setRequired(true)
+                .setAutocomplete(true) // 🔥 ENABLE AUTOCOMPLETE
         ),
 
+    /* ------------------ AUTOCOMPLETE ------------------ */
+    async autocomplete(interaction) {
+        const input = interaction.options.getFocused();
+        const items = cache.getItems();
+
+        if (!items.length) return;
+
+        const last = getLastEntry(input);
+
+        if (!last || last.length < 2) {
+            return interaction.respond([]);
+        }
+
+        const matches = items
+            .filter(i => i.name.toLowerCase().includes(last))
+            .slice(0, 25);
+
+        // rebuild full string
+        const base = input.substring(0, input.lastIndexOf(last));
+
+        const results = matches.map(item => ({
+            name: item.name,
+            value: base + item.name
+        }));
+
+        await interaction.respond(results);
+    },
+
+    /* ------------------ EXECUTE ------------------ */
     async execute(interaction) {
         try {
             await interaction.deferReply();
@@ -104,81 +93,67 @@ module.exports = {
             const prices = cache.getPrices();
 
             if (!itemsList.length || !Object.keys(prices).length) {
-                return interaction.editReply('⏳ Price data still loading...');
+                return interaction.editReply('⏳ Loading data...');
             }
 
             const entries = input.split(',').map(e => e.trim());
 
-            let totalValue = 0;
-            let outputLines = [];
-            let firstItemIcon = null;
+            let total = 0;
+            let lines = [];
 
             for (const entry of entries) {
 
-                /* ------------------ GP INPUT ------------------ */
-                const gpValue = parseGP(entry);
-                if (gpValue !== null) {
-                    totalValue += gpValue;
-                    outputLines.push(`💰 GP: ${gpValue.toLocaleString()} gp`);
+                const gp = parseGP(entry);
+                if (gp !== null) {
+                    total += gp;
+                    lines.push(`💰 ${gp.toLocaleString()} gp`);
                     continue;
                 }
 
-                /* ------------------ ITEM PARSE ------------------ */
                 let name;
-                let quantity = 1;
+                let qty = 1;
 
                 if (entry.includes(':')) {
                     const [n, q] = entry.split(':');
                     name = n.trim();
-                    quantity = parseInt(q);
+                    qty = parseInt(q);
 
-                    if (isNaN(quantity) || quantity <= 0) {
-                        return interaction.editReply(`❌ Invalid quantity for ${name}`);
+                    if (isNaN(qty)) {
+                        return interaction.editReply(`Invalid qty: ${entry}`);
                     }
                 } else {
-                    name = entry.trim();
+                    name = entry;
                 }
 
                 const item = findBestMatch(itemsList, name);
 
                 if (!item) {
-                    return interaction.editReply(`❌ Item not found: ${name}`);
+                    return interaction.editReply(`Item not found: ${name}`);
                 }
 
-                const priceData = prices[item.id];
-
-                if (!priceData) {
-                    return interaction.editReply(`❌ No price data for ${item.name}`);
+                const price = prices[item.id];
+                if (!price) {
+                    return interaction.editReply(`No price: ${item.name}`);
                 }
 
-                const buy = priceData.high ?? 0;
-                const sell = priceData.low ?? 0;
-                const avg = Math.floor((buy + sell) / 2);
+                const avg = Math.floor(((price.high ?? 0) + (price.low ?? 0)) / 2);
+                const totalItem = avg * qty;
 
-                const itemTotal = avg * quantity;
-                totalValue += itemTotal;
+                total += totalItem;
 
-                if (!firstItemIcon) {
-                    firstItemIcon = getItemIcon(item.name);
-                }
-
-                outputLines.push(
-                    `• **${item.name}** x${quantity}\n   Avg: ${avg.toLocaleString()} → ${itemTotal.toLocaleString()} gp`
+                lines.push(
+                    `• ${item.name} x${qty} → ${totalItem.toLocaleString()} gp`
                 );
             }
 
             const embed = new EmbedBuilder()
-                .setColor(getColorByValue(totalValue))
-                .setTitle('🧮 OSRS Total Calculator')
-                .setDescription(outputLines.join('\n\n'))
+                .setColor(getColorByValue(total))
+                .setTitle('🧮 Total Value')
+                .setDescription(lines.join('\n\n'))
                 .addFields({
-                    name: '💰 Grand Total',
-                    value: `**${totalValue.toLocaleString()} gp**`
+                    name: '💰 Total',
+                    value: `**${total.toLocaleString()} gp**`
                 })
-                .setThumbnail(firstItemIcon)
-                // 🔥 keep disabled until stable
-                //.setImage('attachment://tftp_banner.gif')
-                .setFooter({ text: 'TFTP System (Cached Prices)' })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
@@ -187,10 +162,10 @@ module.exports = {
             console.error("SUM ERROR:", error);
 
             if (interaction.deferred || interaction.replied) {
-                await interaction.editReply('❌ Error calculating total.');
+                await interaction.editReply('❌ Error calculating.');
             } else {
                 await interaction.reply({
-                    content: '❌ Error calculating total.',
+                    content: '❌ Error calculating.',
                     ephemeral: true
                 });
             }
