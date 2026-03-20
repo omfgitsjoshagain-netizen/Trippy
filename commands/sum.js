@@ -1,19 +1,17 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const path = require('path');
 const cache = require('../cache');
 
 /* ------------------ COLOR ------------------ */
 function getColorByValue(value) {
     if (value >= 1_000_000_000) return 0xFFD700;
     if (value >= 100_000_000) return 0x0099FF;
-    if (value >= 1_000_000) return 0x5C9E31;
+    if (value >= 10_000_000) return 0x00FF00;
     return 0x808080;
 }
 
 /* ------------------ LEVENSHTEIN ------------------ */
 function levenshtein(a, b) {
     const matrix = [];
-
     for (let i = 0; i <= b.length; i++) matrix[i] = [i];
     for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
 
@@ -34,71 +32,46 @@ function levenshtein(a, b) {
     return matrix[b.length][a.length];
 }
 
-/* ------------------ HYBRID MATCHER ------------------ */
+/* ------------------ HYBRID MATCH ------------------ */
 function findBestMatch(itemsList, input) {
-
-    if (!input || input.length < 2) return null;
-
-    const normalizedInput = input.toLowerCase().trim();
+    const normalized = input.toLowerCase().trim();
 
     // Exact
-    const exactMatch = itemsList.find(item =>
-        item.name.toLowerCase() === normalizedInput
-    );
-    if (exactMatch) return exactMatch;
+    const exact = itemsList.find(i => i.name.toLowerCase() === normalized);
+    if (exact) return exact;
 
     // Partial
-    const partialMatches = itemsList.filter(item =>
-        item.name.toLowerCase().includes(normalizedInput)
+    const partial = itemsList.filter(i =>
+        i.name.toLowerCase().includes(normalized)
     );
+    if (partial.length === 1) return partial[0];
+    if (partial.length > 1) return partial[0];
 
-    if (partialMatches.length === 1) return partialMatches[0];
+    // Light fuzzy
+    if (normalized.length < 4) return null;
 
-    if (partialMatches.length > 1) {
-        return partialMatches.sort(
-            (a, b) =>
-                Math.abs(a.name.length - normalizedInput.length) -
-                Math.abs(b.name.length - normalizedInput.length)
-        )[0];
-    }
-
-    // Fuzzy fallback
-    if (normalizedInput.length < 4) return null;
-
-    let bestMatch = null;
+    let best = null;
     let bestScore = Infinity;
 
     for (const item of itemsList) {
-        const score = levenshtein(
-            normalizedInput,
-            item.name.toLowerCase()
-        );
-
+        const score = levenshtein(normalized, item.name.toLowerCase());
         if (score < bestScore) {
             bestScore = score;
-            bestMatch = item;
+            best = item;
         }
     }
 
-    const maxAllowedDistance =
-        normalizedInput.length <= 5
-            ? 1
-            : Math.floor(normalizedInput.length * 0.3);
-
-    if (bestScore <= maxAllowedDistance) {
-        return bestMatch;
-    }
-
-    return null;
+    const max = Math.floor(normalized.length * 0.3);
+    return bestScore <= max ? best : null;
 }
 
 /* ------------------ GP PARSER ------------------ */
 function parseGP(value) {
     const input = value.toLowerCase().trim();
 
+    if (/^\d+(\.\d+)?b$/.test(input)) return parseFloat(input) * 1_000_000_000;
     if (/^\d+(\.\d+)?m$/.test(input)) return parseFloat(input) * 1_000_000;
     if (/^\d+(\.\d+)?k$/.test(input)) return parseFloat(input) * 1_000;
-    if (/^\d+(\.\d+)?b$/.test(input)) return parseFloat(input) * 1_000_000_000;
     if (/^\d+$/.test(input)) return parseInt(input);
 
     return null;
@@ -114,24 +87,24 @@ function getItemIcon(name) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('sumitems')
-        .setDescription('Sum OSRS items using cached average price')
+        .setDescription('Sum OSRS items + GP using cached prices')
         .addStringOption(option =>
             option.setName('items')
-                .setDescription('Format: item:qty, item, 10m, 500k')
+                .setDescription('item:qty, item, 10m, 500k')
                 .setRequired(true)
         ),
 
     async execute(interaction) {
-
-        const input = interaction.options.getString('items');
-        await interaction.deferReply();
-
         try {
+            await interaction.deferReply();
+
+            const input = interaction.options.getString('items');
+
             const itemsList = cache.getItems();
             const prices = cache.getPrices();
 
             if (!itemsList.length || !Object.keys(prices).length) {
-                return interaction.editReply('Price data is still loading. Try again shortly.');
+                return interaction.editReply('⏳ Price data still loading...');
             }
 
             const entries = input.split(',').map(e => e.trim());
@@ -142,24 +115,25 @@ module.exports = {
 
             for (const entry of entries) {
 
-                // Raw GP support
+                /* ------------------ GP INPUT ------------------ */
                 const gpValue = parseGP(entry);
                 if (gpValue !== null) {
                     totalValue += gpValue;
-                    outputLines.push(`💰 GP Added: ${gpValue.toLocaleString()} gp`);
+                    outputLines.push(`💰 GP: ${gpValue.toLocaleString()} gp`);
                     continue;
                 }
 
+                /* ------------------ ITEM PARSE ------------------ */
                 let name;
                 let quantity = 1;
 
                 if (entry.includes(':')) {
-                    const parts = entry.split(':');
-                    name = parts[0].trim();
-                    quantity = parseInt(parts[1]);
+                    const [n, q] = entry.split(':');
+                    name = n.trim();
+                    quantity = parseInt(q);
 
                     if (isNaN(quantity) || quantity <= 0) {
-                        return interaction.editReply(`Invalid quantity for ${name}`);
+                        return interaction.editReply(`❌ Invalid quantity for ${name}`);
                     }
                 } else {
                     name = entry.trim();
@@ -167,50 +141,59 @@ module.exports = {
 
                 const item = findBestMatch(itemsList, name);
 
-                if (!item)
-                    return interaction.editReply(`Item not found: ${name}`);
+                if (!item) {
+                    return interaction.editReply(`❌ Item not found: ${name}`);
+                }
 
                 const priceData = prices[item.id];
 
-                if (!priceData)
-                    return interaction.editReply(`No price data for ${item.name}`);
+                if (!priceData) {
+                    return interaction.editReply(`❌ No price data for ${item.name}`);
+                }
 
                 const buy = priceData.high ?? 0;
                 const sell = priceData.low ?? 0;
-                const average = Math.floor((buy + sell) / 2);
+                const avg = Math.floor((buy + sell) / 2);
 
-                const itemTotal = average * quantity;
+                const itemTotal = avg * quantity;
                 totalValue += itemTotal;
 
-                if (!firstItemIcon)
+                if (!firstItemIcon) {
                     firstItemIcon = getItemIcon(item.name);
+                }
 
                 outputLines.push(
-                    `• **${item.name}** x${quantity}\n   Avg: ${average.toLocaleString()} gp → ${itemTotal.toLocaleString()} gp`
+                    `• **${item.name}** x${quantity}\n   Avg: ${avg.toLocaleString()} → ${itemTotal.toLocaleString()} gp`
                 );
             }
 
             const embed = new EmbedBuilder()
                 .setColor(getColorByValue(totalValue))
-                .setTitle('🧮 OSRS Average Total Calculator (Cached)')
+                .setTitle('🧮 OSRS Total Calculator')
                 .setDescription(outputLines.join('\n\n'))
                 .addFields({
                     name: '💰 Grand Total',
                     value: `**${totalValue.toLocaleString()} gp**`
                 })
                 .setThumbnail(firstItemIcon)
-                .setImage('attachment://tftp_banner.gif')
-                .setFooter({ text: 'TFTP Price Checker' })
+                // 🔥 keep disabled until stable
+                //.setImage('attachment://tftp_banner.gif')
+                .setFooter({ text: 'TFTP System (Cached Prices)' })
                 .setTimestamp();
 
-            await interaction.editReply({
-                embeds: [embed],
-                files: [path.join(__dirname, '../assets/tftp_banner.gif')]
-            });
+            await interaction.editReply({ embeds: [embed] });
 
         } catch (error) {
-            console.error(error);
-            await interaction.editReply('Error calculating total.');
+            console.error("SUM ERROR:", error);
+
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply('❌ Error calculating total.');
+            } else {
+                await interaction.reply({
+                    content: '❌ Error calculating total.',
+                    ephemeral: true
+                });
+            }
         }
     }
 };
