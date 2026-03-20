@@ -1,5 +1,6 @@
-const cache = require('./cache');
 require('dotenv').config();
+require('./cache'); // 🔥 THIS AUTO STARTS CACHE
+
 const fs = require('fs');
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
 
@@ -7,6 +8,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.commands = new Collection();
 
+// Load commands
 const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
 
 for (const file of commandFiles) {
@@ -14,14 +16,12 @@ for (const file of commandFiles) {
     client.commands.set(command.data.name, command);
 }
 
-client.once('ready', async () => {
-    console.log(`Logged in as ${client.user.tag}`);
-
-    await cache.loadMapping(); // load once
-    await cache.loadPrices();  // load once
-    cache.startPriceUpdater(); // auto refresh
+// Bot ready
+client.once('ready', () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
+// Handle interactions
 client.on('interactionCreate', async interaction => {
 
     if (interaction.isAutocomplete()) {
@@ -44,11 +44,17 @@ client.on('interactionCreate', async interaction => {
     try {
         await command.execute(interaction);
     } catch (error) {
-        console.error(error);
-        await interaction.reply({
-            content: 'Error executing command.',
-            ephemeral: true
-        });
+        console.error("COMMAND ERROR:", error);
+
+        if (interaction.deferred || interaction.replied) {
+            await interaction.editReply('❌ Error executing command.');
+        } else {
+            await interaction.reply({
+                content: '❌ Error executing command.',
+                ephemeral: true
+            });
+        }
     }
 });
+
 client.login(process.env.TOKEN);
