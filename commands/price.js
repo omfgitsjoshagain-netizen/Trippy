@@ -1,66 +1,94 @@
-async execute(interaction) {
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const cache = require('../cache');
 
-    try {
-        // 🔥 ALWAYS FIRST
-        await interaction.deferReply();
+/* ------------------ VALUE TIER ------------------ */
+function getValueTier(value) {
+    if (value >= 1_000_000_000) return { color: 0xFF0000, emoji: "🔥", label: "LEGENDARY (1B+)" };
+    if (value >= 100_000_000) return { color: 0x0099FF, emoji: "💎", label: "ELITE (100M+)" };
+    if (value >= 10_000_000) return { color: 0x00FF00, emoji: "🟢", label: "HIGH (10M+)" };
+    return { color: 0x808080, emoji: "⚪", label: "STANDARD" };
+}
 
-        const itemName = interaction.options.getString('item');
+/* ------------------ MATCH ------------------ */
+function findBestMatch(itemsList, input) {
+    const normalized = input.toLowerCase().trim();
 
-        const itemsList = cache.getItems();
-        const prices = cache.getPrices();
+    // exact
+    const exact = itemsList.find(i => i.name.toLowerCase() === normalized);
+    if (exact) return exact;
 
-        if (!itemsList.length || !Object.keys(prices).length) {
-            return interaction.editReply(
-                '⏳ Price system is warming up, try again in a few seconds...'
-            );
-        }
+    // partial
+    const partial = itemsList.filter(i =>
+        i.name.toLowerCase().includes(normalized)
+    );
+    if (partial.length) return partial[0];
 
-        const item = findBestMatch(itemsList, itemName);
+    return null;
+}
 
-        if (!item) {
-            return interaction.editReply('❌ Item not found.');
-        }
+/* ------------------ COMMAND ------------------ */
 
-        const priceData = prices[item.id];
+module.exports = {
+    data: new SlashCommandBuilder()
+        .setName('price')
+        .setDescription('Get OSRS item price')
+        .addStringOption(option =>
+            option.setName('item')
+                .setDescription('Item name')
+                .setRequired(true)
+        ),
 
-        if (!priceData || (!priceData.high && !priceData.low)) {
-            return interaction.editReply('❌ Price unavailable.');
-        }
+    async execute(interaction) {
+        try {
+            await interaction.deferReply();
 
-        const buy = priceData.high ?? 0;
-        const sell = priceData.low ?? 0;
-        const average = Math.floor((buy + sell) / 2);
+            const itemName = interaction.options.getString('item');
 
-        const tier = getValueTier(average);
+            const itemsList = cache.getItems();
+            const prices = cache.getPrices();
 
-        const embed = new EmbedBuilder()
-            .setColor(tier.color)
-            .setTitle(`${tier.emoji} ${item.name}`)
-            .setThumbnail(getItemIcon(item.name))
-            // 🔥 TEMP REMOVE IMAGE (prevents timeout)
-            //.setImage('attachment://tftp_banner.gif')
-            .addFields(
-                { name: "📊 VALUE TIER", value: `**${tier.label}**` },
-                { name: "📈 Buy", value: `**${buy.toLocaleString()} gp**`, inline: true },
-                { name: "📉 Sell", value: `**${sell.toLocaleString()} gp**`, inline: true },
-                { name: "📊 Average", value: `**${average.toLocaleString()} gp**` }
-            )
-            .setFooter({ text: "TFTP Trading System (Cached)" })
-            .setTimestamp();
+            if (!itemsList.length || !Object.keys(prices).length) {
+                return interaction.editReply('⏳ Loading price data...');
+            }
 
-        await interaction.editReply({ embeds: [embed] });
+            const item = findBestMatch(itemsList, itemName);
 
-    } catch (error) {
-        console.error("PRICE ERROR:", error);
+            if (!item) return interaction.editReply('❌ Item not found.');
 
-        // 🔥 SAFE RESPONSE HANDLING
-        if (interaction.deferred || interaction.replied) {
-            await interaction.editReply('❌ Error fetching price.');
-        } else {
-            await interaction.reply({
-                content: '❌ Error fetching price.',
-                ephemeral: true
-            });
+            const priceData = prices[item.id];
+
+            if (!priceData) return interaction.editReply('❌ Price unavailable.');
+
+            const buy = priceData.high ?? 0;
+            const sell = priceData.low ?? 0;
+            const avg = Math.floor((buy + sell) / 2);
+
+            const tier = getValueTier(avg);
+
+            const embed = new EmbedBuilder()
+                .setColor(tier.color)
+                .setTitle(`${tier.emoji} ${item.name}`)
+                .addFields(
+                    { name: "Buy", value: `${buy.toLocaleString()} gp`, inline: true },
+                    { name: "Sell", value: `${sell.toLocaleString()} gp`, inline: true },
+                    { name: "Average", value: `${avg.toLocaleString()} gp` }
+                )
+                .setFooter({ text: tier.label })
+                .setTimestamp();
+
+            await interaction.editReply({ embeds: [embed] });
+
+        } catch (error) {
+            console.error("PRICE ERROR:", error);
+
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply('❌ Error fetching price.');
+            } else {
+                await interaction.reply({
+                    content: '❌ Error fetching price.',
+                    ephemeral: true
+                });
+            }
         }
     }
-}
+};
