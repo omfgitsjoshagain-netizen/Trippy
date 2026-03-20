@@ -1,12 +1,12 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const cache = require('../cache');
 
-/* ------------------ RATING ------------------ */
+/* ------------------ TIER SYSTEM ------------------ */
 function getTier(percent) {
     if (percent >= 8) return "🔥 INSANE";
     if (percent >= 5) return "💎 ELITE";
     if (percent >= 3) return "👍 GOOD";
-    if (percent >= 1) return "⚠️ OK";
+    if (percent >= 1) return "⚠️ SAFE";
     return "❌ BAD";
 }
 
@@ -15,17 +15,33 @@ function getTier(percent) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('bestflips')
-        .setDescription('🔥 Find best OSRS flips right now'),
+        .setDescription('🔥 Advanced OSRS flip scanner')
+        .addStringOption(option =>
+            option.setName('mode')
+                .setDescription('Flip type')
+                .addChoices(
+                    { name: 'High Margin %', value: 'margin' },
+                    { name: 'High Profit GP', value: 'profit' },
+                    { name: 'Safe Flips', value: 'safe' }
+                )
+        )
+        .addIntegerOption(option =>
+            option.setName('budget')
+                .setDescription('Max item price (optional)')
+        ),
 
     async execute(interaction) {
         try {
             await interaction.deferReply();
 
+            const mode = interaction.options.getString('mode') || 'margin';
+            const budget = interaction.options.getInteger('budget');
+
             const items = cache.getItems();
             const prices = cache.getPrices();
 
             if (!items.length || !Object.keys(prices).length) {
-                return interaction.editReply('⏳ Loading price data...');
+                return interaction.editReply('⏳ Loading market data...');
             }
 
             const flips = [];
@@ -38,50 +54,68 @@ module.exports = {
                 const buy = price.high;
                 const sell = price.low;
 
-                const margin = buy - sell;
-                if (margin <= 0) continue;
+                if (buy <= 0 || sell <= 0) continue;
 
+                // 💰 Budget filter
+                if (budget && buy > budget) continue;
+
+                const margin = buy - sell;
                 const percent = (margin / sell) * 100;
 
-                // 🔥 FILTER BAD ITEMS
-                if (margin < 1000) continue;        // too low profit
-                if (percent < 1) continue;          // too low margin
-                if (buy < 5000) continue;           // junk items
+                // 🔥 HARD FILTERS
+                if (margin < 1000) continue;
+                if (percent < 1) continue;
+                if (buy < 5000) continue;
+
+                const profitEach = margin;
+                const profitInv = margin * 28;
+                const profitCycle = margin * 100; // estimate GE limit
 
                 flips.push({
                     name: item.name,
                     margin,
                     percent,
-                    buy
+                    buy,
+                    profitEach,
+                    profitInv,
+                    profitCycle
                 });
             }
 
-            // 🔥 SORT BEST FIRST
-            flips.sort((a, b) => {
-                // prioritize % first, then margin
-                if (b.percent === a.percent) {
-                    return b.margin - a.margin;
-                }
-                return b.percent - a.percent;
-            });
+            /* ------------------ SORT MODES ------------------ */
+
+            if (mode === 'profit') {
+                flips.sort((a, b) => b.profitEach - a.profitEach);
+            } else if (mode === 'safe') {
+                flips.sort((a, b) => a.percent - b.percent);
+            } else {
+                flips.sort((a, b) => b.percent - a.percent);
+            }
 
             const top = flips.slice(0, 10);
 
             if (!top.length) {
-                return interaction.editReply('❌ No good flips found.');
+                return interaction.editReply('❌ No flips found.');
             }
 
             const lines = top.map((f, i) => {
                 return `**${i + 1}. ${f.name}**\n` +
-                       `💰 Margin: ${f.margin.toLocaleString()} gp\n` +
-                       `📊 ${f.percent.toFixed(2)}% | ${getTier(f.percent)}\n`;
+                       `💰 ${f.margin.toLocaleString()} gp | ${f.percent.toFixed(2)}%\n` +
+                       `🎒 Inv: ${f.profitInv.toLocaleString()} gp\n` +
+                       `📦 Cycle: ${f.profitCycle.toLocaleString()} gp\n` +
+                       `🚦 ${getTier(f.percent)}\n`;
             });
 
             const embed = new EmbedBuilder()
                 .setColor(0x00FFAA)
-                .setTitle('🔥 BEST FLIPS RIGHT NOW')
+                .setTitle('🔥 BEST FLIPS (PRO MODE)')
                 .setDescription(lines.join('\n'))
-                .setFooter({ text: 'TFTP Flip Scanner' })
+                .addFields({
+                    name: "⚙️ Mode",
+                    value: mode.toUpperCase(),
+                    inline: true
+                })
+                .setFooter({ text: 'TFTP Flip Engine v2' })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
@@ -90,10 +124,10 @@ module.exports = {
             console.error("BESTFLIPS ERROR:", error);
 
             if (interaction.deferred) {
-                await interaction.editReply('❌ Error finding flips.');
+                await interaction.editReply('❌ Error scanning flips.');
             } else {
                 await interaction.reply({
-                    content: '❌ Error finding flips.',
+                    content: '❌ Error scanning flips.',
                     ephemeral: true
                 });
             }
