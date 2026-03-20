@@ -3,48 +3,51 @@ const axios = require('axios');
 let itemsCache = [];
 let pricesCache = {};
 
-// Load item mapping
+/* ------------------ LOAD ITEM MAPPING ------------------ */
 async function loadMapping() {
     try {
-        const response = await axios.get(
+        const res = await axios.get(
             'https://prices.runescape.wiki/api/v1/osrs/mapping'
         );
-        itemsCache = response.data;
+        itemsCache = res.data;
         console.log('✅ Item mapping cached.');
-    } catch (error) {
-        console.error('❌ Failed to load mapping:', error.message);
+    } catch (err) {
+        console.error('❌ Mapping error:', err.message);
     }
 }
 
-// Load prices
+/* ------------------ LOAD PRICES ------------------ */
 async function loadPrices() {
     try {
-        const response = await axios.get(
+        const res = await axios.get(
             'https://prices.runescape.wiki/api/v1/osrs/latest'
         );
-        pricesCache = response.data.data;
+        pricesCache = res.data.data;
         console.log('💰 Prices cache updated.');
-    } catch (error) {
-        console.error('❌ Failed to load prices:', error.message);
+    } catch (err) {
+        console.error('❌ Price error:', err.message);
     }
 }
 
-// Initialize cache
-async function initCache() {
-    console.log('🚀 Initializing cache...');
-
-    await loadMapping();
-    await loadPrices();
-
-    // Refresh prices every 60 seconds
+/* ------------------ AUTO REFRESH ------------------ */
+function startPriceUpdater() {
     setInterval(loadPrices, 60 * 1000);
 }
 
-// Start cache automatically
-initCache();
+/* ------------------ GETTERS ------------------ */
+function getItems() {
+    return itemsCache;
+}
 
-// Export functions
+function getPrices() {
+    return pricesCache;
+}
+
+/* ------------------ EXPORTS ------------------ */
 module.exports = {
-    getItems: () => itemsCache,
-    getPrices: () => pricesCache
+    loadMapping,
+    loadPrices,
+    startPriceUpdater,
+    getItems,
+    getPrices
 };
