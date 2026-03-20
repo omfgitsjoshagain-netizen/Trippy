@@ -23,19 +23,7 @@ function levenshtein(a, b) {
     return matrix[b.length][a.length];
 }
 
-/* ------------------ SMART MATCH (USED FOR AUTOCOMPLETE SORTING) ------------------ */
-function scoreMatch(name, input) {
-    const n = name.toLowerCase();
-    const i = input.toLowerCase();
-
-    if (n === i) return 0; // best
-    if (n.startsWith(i)) return 1;
-    if (n.includes(i)) return 2;
-
-    return levenshtein(i, n) + 5; // worse fallback
-}
-
-/* ------------------ HYBRID MATCH ------------------ */
+/* ------------------ MATCH ------------------ */
 function findBestMatch(itemsList, input) {
     const normalized = input.toLowerCase().trim();
 
@@ -45,7 +33,6 @@ function findBestMatch(itemsList, input) {
     const partial = itemsList.filter(i =>
         i.name.toLowerCase().includes(normalized)
     );
-
     if (partial.length) return partial[0];
 
     if (normalized.length < 3) return null;
@@ -86,34 +73,29 @@ module.exports = {
                 .setAutocomplete(true)
         ),
 
-    /* ------------------ 🔥 AUTOCOMPLETE (FIXED) ------------------ */
+    /* ------------------ 🔥 FIXED AUTOCOMPLETE ------------------ */
     async autocomplete(interaction) {
         try {
-            const input = interaction.options.getFocused();
             const items = cache.getItems();
-
             if (!items.length) {
                 return interaction.respond([]);
             }
 
+            const input = interaction.options.getFocused() || "";
             const query = input.toLowerCase().trim();
 
-            // 🔥 Always return something
             let matches;
 
+            // 🔥 SAME BEHAVIOR AS SUMITEMS
             if (!query) {
                 matches = items.slice(0, 25);
             } else {
                 matches = items
-                    .map(item => ({
-                        item,
-                        score: scoreMatch(item.name, query)
-                    }))
-                    .sort((a, b) => a.score - b.score)
-                    .slice(0, 25)
-                    .map(x => x.item);
+                    .filter(i => i.name.toLowerCase().includes(query))
+                    .slice(0, 25);
             }
 
+            // 🔥 ALWAYS RESPOND
             await interaction.respond(
                 matches.map(i => ({
                     name: i.name,
@@ -123,6 +105,11 @@ module.exports = {
 
         } catch (err) {
             console.error("AUTOCOMPLETE ERROR:", err);
+
+            // 🔥 FAIL SAFE
+            try {
+                await interaction.respond([]);
+            } catch {}
         }
     },
 
