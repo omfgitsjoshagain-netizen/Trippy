@@ -1,29 +1,65 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const cache = require('../cache');
 
-/* ------------------ VALUE TIER ------------------ */
-function getValueTier(value) {
-    if (value >= 1_000_000_000) return { color: 0xFF0000, emoji: "🔥", label: "LEGENDARY (1B+)" };
-    if (value >= 100_000_000) return { color: 0x0099FF, emoji: "💎", label: "ELITE (100M+)" };
-    if (value >= 10_000_000) return { color: 0x00FF00, emoji: "🟢", label: "HIGH (10M+)" };
-    return { color: 0x808080, emoji: "⚪", label: "STANDARD" };
+/* ------------------ LEVENSHTEIN ------------------ */
+function levenshtein(a, b) {
+    const matrix = [];
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b[i - 1] === a[j - 1]) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1,
+                    matrix[i][j - 1] + 1,
+                    matrix[i - 1][j] + 1
+                );
+            }
+        }
+    }
+    return matrix[b.length][a.length];
 }
 
-/* ------------------ MATCH ------------------ */
+/* ------------------ HYBRID MATCH ------------------ */
 function findBestMatch(itemsList, input) {
     const normalized = input.toLowerCase().trim();
 
-    // exact
+    // Exact
     const exact = itemsList.find(i => i.name.toLowerCase() === normalized);
     if (exact) return exact;
 
-    // partial
+    // Partial
     const partial = itemsList.filter(i =>
         i.name.toLowerCase().includes(normalized)
     );
-    if (partial.length) return partial[0];
+    if (partial.length === 1) return partial[0];
+    if (partial.length > 1) return partial[0];
 
-    return null;
+    // Fuzzy (light)
+    let best = null;
+    let bestScore = Infinity;
+
+    for (const item of itemsList) {
+        const score = levenshtein(normalized, item.name.toLowerCase());
+        if (score < bestScore) {
+            bestScore = score;
+            best = item;
+        }
+    }
+
+    const max = Math.floor(normalized.length * 0.3);
+    return bestScore <= max ? best : null;
+}
+
+/* ------------------ VALUE TIERS ------------------ */
+function getValueTier(value) {
+    if (value >= 1_000_000_000) return { color: 0xFF0000, emoji: "🔥", label: "LEGENDARY" };
+    if (value >= 100_000_000) return { color: 0x0099FF, emoji: "💎", label: "ELITE" };
+    if (value >= 10_000_000) return { color: 0x00FF00, emoji: "🟢", label: "HIGH" };
+    return { color: 0x808080, emoji: "⚪", label: "STANDARD" };
 }
 
 /* ------------------ COMMAND ------------------ */
@@ -34,16 +70,35 @@ module.exports = {
         .setDescription('Get OSRS item price')
         .addStringOption(option =>
             option.setName('item')
-                .setDescription('Item name')
+                .setDescription('Start typing item...')
                 .setRequired(true)
+                .setAutocomplete(true) // 🔥 ENABLE AUTOCOMPLETE
         ),
 
+    /* ------------------ AUTOCOMPLETE ------------------ */
+    async autocomplete(interaction) {
+        const focused = interaction.options.getFocused().toLowerCase();
+        const items = cache.getItems();
+
+        if (!items.length) return;
+
+        const results = items
+            .filter(i => i.name.toLowerCase().includes(focused))
+            .slice(0, 25)
+            .map(i => ({
+                name: i.name,
+                value: i.name
+            }));
+
+        await interaction.respond(results);
+    },
+
+    /* ------------------ EXECUTE ------------------ */
     async execute(interaction) {
         try {
             await interaction.deferReply();
 
             const itemName = interaction.options.getString('item');
-
             const itemsList = cache.getItems();
             const prices = cache.getPrices();
 
@@ -53,11 +108,15 @@ module.exports = {
 
             const item = findBestMatch(itemsList, itemName);
 
-            if (!item) return interaction.editReply('❌ Item not found.');
+            if (!item) {
+                return interaction.editReply('❌ Item not found.');
+            }
 
             const priceData = prices[item.id];
 
-            if (!priceData) return interaction.editReply('❌ Price unavailable.');
+            if (!priceData) {
+                return interaction.editReply('❌ Price unavailable.');
+            }
 
             const buy = priceData.high ?? 0;
             const sell = priceData.low ?? 0;
