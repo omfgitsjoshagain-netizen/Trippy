@@ -23,22 +23,31 @@ function levenshtein(a, b) {
     return matrix[b.length][a.length];
 }
 
+/* ------------------ SMART MATCH (USED FOR AUTOCOMPLETE SORTING) ------------------ */
+function scoreMatch(name, input) {
+    const n = name.toLowerCase();
+    const i = input.toLowerCase();
+
+    if (n === i) return 0; // best
+    if (n.startsWith(i)) return 1;
+    if (n.includes(i)) return 2;
+
+    return levenshtein(i, n) + 5; // worse fallback
+}
+
 /* ------------------ HYBRID MATCH ------------------ */
 function findBestMatch(itemsList, input) {
     const normalized = input.toLowerCase().trim();
 
-    // Exact
     const exact = itemsList.find(i => i.name.toLowerCase() === normalized);
     if (exact) return exact;
 
-    // Partial
     const partial = itemsList.filter(i =>
         i.name.toLowerCase().includes(normalized)
     );
-    if (partial.length === 1) return partial[0];
-    if (partial.length > 1) return partial[0];
 
-    // Fuzzy (light)
+    if (partial.length) return partial[0];
+
     if (normalized.length < 3) return null;
 
     let best = null;
@@ -77,29 +86,40 @@ module.exports = {
                 .setAutocomplete(true)
         ),
 
-    /* ------------------ AUTOCOMPLETE ------------------ */
+    /* ------------------ 🔥 AUTOCOMPLETE (FIXED) ------------------ */
     async autocomplete(interaction) {
         try {
-            const focused = interaction.options.getFocused().toLowerCase();
+            const input = interaction.options.getFocused();
             const items = cache.getItems();
 
             if (!items.length) {
                 return interaction.respond([]);
             }
 
-            if (!focused || focused.length < 1) {
-                return interaction.respond([]);
+            const query = input.toLowerCase().trim();
+
+            // 🔥 Always return something
+            let matches;
+
+            if (!query) {
+                matches = items.slice(0, 25);
+            } else {
+                matches = items
+                    .map(item => ({
+                        item,
+                        score: scoreMatch(item.name, query)
+                    }))
+                    .sort((a, b) => a.score - b.score)
+                    .slice(0, 25)
+                    .map(x => x.item);
             }
 
-            const results = items
-                .filter(i => i.name.toLowerCase().includes(focused))
-                .slice(0, 25)
-                .map(i => ({
+            await interaction.respond(
+                matches.map(i => ({
                     name: i.name,
                     value: i.name
-                }));
-
-            await interaction.respond(results);
+                }))
+            );
 
         } catch (err) {
             console.error("AUTOCOMPLETE ERROR:", err);
