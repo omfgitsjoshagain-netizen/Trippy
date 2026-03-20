@@ -23,60 +23,61 @@ function levenshtein(a, b) {
     return matrix[b.length][a.length];
 }
 
-/* ------------------ HYBRID MATCH ------------------ */
+/* ------------------ MATCH ------------------ */
 function findBestMatch(items, input) {
-    const normalized = input.toLowerCase().trim();
+    const name = input.toLowerCase().trim();
 
-    const exact = items.find(i => i.name.toLowerCase() === normalized);
+    const exact = items.find(i => i.name.toLowerCase() === name);
     if (exact) return exact;
 
     const partial = items.filter(i =>
-        i.name.toLowerCase().includes(normalized)
+        i.name.toLowerCase().includes(name)
     );
     if (partial.length) return partial[0];
-
-    if (normalized.length < 3) return null;
 
     let best = null;
     let bestScore = Infinity;
 
     for (const item of items) {
-        const score = levenshtein(normalized, item.name.toLowerCase());
+        const score = levenshtein(name, item.name.toLowerCase());
         if (score < bestScore) {
             bestScore = score;
             best = item;
         }
     }
 
-    const max = Math.floor(normalized.length * 0.3);
-    return bestScore <= max ? best : null;
+    return best;
 }
 
-/* ------------------ SMART RATING ------------------ */
-function getFlipTier(percent, margin, price) {
+/* ------------------ GOD SCORE ------------------ */
+function calculateScore(percent, margin, price) {
+    let score = 0;
 
-    // Filter trash flips
-    if (margin < 50 || price < 1000) {
-        return { label: "❌ TRASH FLIP", color: 0x555555 };
-    }
+    // Margin %
+    if (percent >= 8) score += 40;
+    else if (percent >= 5) score += 30;
+    else if (percent >= 3) score += 20;
+    else if (percent >= 1) score += 10;
 
-    if (percent >= 8) {
-        return { label: "🔥 INSANE FLIP", color: 0xFF0000 };
-    }
+    // Raw margin
+    if (margin >= 1_000_000) score += 30;
+    else if (margin >= 100_000) score += 20;
+    else if (margin >= 10_000) score += 10;
 
-    if (percent >= 5) {
-        return { label: "💎 ELITE FLIP", color: 0x0099FF };
-    }
+    // Price tier (avoid junk items)
+    if (price >= 10_000_000) score += 30;
+    else if (price >= 1_000_000) score += 20;
+    else if (price >= 100_000) score += 10;
 
-    if (percent >= 3) {
-        return { label: "👍 GOOD FLIP", color: 0x00FF00 };
-    }
+    return Math.min(score, 100);
+}
 
-    if (percent >= 1) {
-        return { label: "⚠️ LOW MARGIN", color: 0xFFA500 };
-    }
-
-    return { label: "❌ BAD FLIP", color: 0x808080 };
+/* ------------------ SIGNAL ------------------ */
+function getSignal(score) {
+    if (score >= 90) return "🔥 GOD FLIP";
+    if (score >= 70) return "💎 ELITE FLIP";
+    if (score >= 50) return "👍 GOOD FLIP";
+    return "❌ AVOID";
 }
 
 /* ------------------ COMMAND ------------------ */
@@ -84,10 +85,10 @@ function getFlipTier(percent, margin, price) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('flip')
-        .setDescription('🔥 Advanced OSRS flipping analyzer')
+        .setDescription('🔥 GOD MODE flip analyzer')
         .addStringOption(option =>
             option.setName('item')
-                .setDescription('item:qty (example: dragon claws:1)')
+                .setDescription('item:qty')
                 .setRequired(true)
         ),
 
@@ -96,12 +97,11 @@ module.exports = {
             await interaction.deferReply();
 
             const input = interaction.options.getString('item');
-
             const items = cache.getItems();
             const prices = cache.getPrices();
 
             if (!items.length || !Object.keys(prices).length) {
-                return interaction.editReply('⏳ Loading price data...');
+                return interaction.editReply('⏳ Loading market...');
             }
 
             let name;
@@ -116,15 +116,11 @@ module.exports = {
             }
 
             const item = findBestMatch(items, name);
-
-            if (!item) {
-                return interaction.editReply('❌ Item not found.');
-            }
+            if (!item) return interaction.editReply('❌ Item not found.');
 
             const price = prices[item.id];
-
             if (!price || !price.high || !price.low) {
-                return interaction.editReply('❌ Price data unavailable.');
+                return interaction.editReply('❌ No price data.');
             }
 
             const buy = price.high;
@@ -133,34 +129,39 @@ module.exports = {
             const margin = buy - sell;
             const percent = (margin / sell) * 100;
 
-            const profitEach = margin;
-            const profitTotal = margin * qty;
-            const profitInv = margin * 28;
+            const score = calculateScore(percent, margin, buy);
+            const signal = getSignal(score);
 
-            const tier = getFlipTier(percent, margin, buy);
+            const profitEach = margin;
+            const profitInv = margin * 28;
+            const profitTotal = margin * qty;
+            const profitCycle = margin * 100;
 
             const embed = new EmbedBuilder()
-                .setColor(tier.color)
-                .setTitle(`📊 ${item.name} Flip Analyzer`)
+                .setColor(score >= 70 ? 0x00FF00 : 0xFF0000)
+                .setTitle(`📊 ${item.name} GOD FLIP ANALYSIS`)
                 .addFields(
                     { name: "📈 Buy", value: `${buy.toLocaleString()} gp`, inline: true },
                     { name: "📉 Sell", value: `${sell.toLocaleString()} gp`, inline: true },
                     { name: "💰 Margin", value: `${margin.toLocaleString()} gp`, inline: true },
 
                     { name: "📊 Margin %", value: `${percent.toFixed(2)}%`, inline: true },
+                    { name: "🧠 Flip Score", value: `${score}/100`, inline: true },
+                    { name: "🚦 Signal", value: signal },
+
                     { name: "🪙 Profit (x1)", value: `${profitEach.toLocaleString()} gp`, inline: true },
                     { name: "🎒 Profit (x28)", value: `${profitInv.toLocaleString()} gp`, inline: true },
-
                     { name: "📦 Your Qty", value: `${profitTotal.toLocaleString()} gp`, inline: true },
-                    { name: "🚦 Rating", value: `**${tier.label}**` }
+
+                    { name: "⚡ GE Cycle Est.", value: `${profitCycle.toLocaleString()} gp` }
                 )
-                .setFooter({ text: "TFTP Pro Flipper Engine" })
+                .setFooter({ text: "TFTP GOD MODE ENGINE" })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
 
-        } catch (error) {
-            console.error("FLIP ERROR:", error);
+        } catch (err) {
+            console.error("FLIP ERROR:", err);
 
             if (interaction.deferred) {
                 await interaction.editReply('❌ Error analyzing flip.');
