@@ -3,6 +3,8 @@ const axios = require('axios');
 let itemsCache = [];
 let pricesCache = {};
 
+/* ------------------ LOAD DATA ------------------ */
+
 async function loadMapping() {
     try {
         const response = await axios.get(
@@ -27,14 +29,35 @@ async function loadPrices() {
     }
 }
 
-function startPriceUpdater() {
-    // Update every 60 seconds
+/* ------------------ START CACHE ------------------ */
+
+async function initCache() {
+    console.log('🚀 Initializing cache...');
+
+    await loadMapping();
+    await loadPrices();
+
+    // Refresh prices every 60 seconds
     setInterval(loadPrices, 60 * 1000);
 }
+
+/* ------------------ GETTERS ------------------ */
 
 function getItems() {
     return itemsCache;
 }
+
+function getPrices() {
+    return pricesCache;
+}
+
+/* ------------------ AUTO START ON IMPORT ------------------ */
+initCache();
+
+module.exports = {
+    getItems,
+    getPrices
+};}
 
 function getPrices() {
     return pricesCache;
