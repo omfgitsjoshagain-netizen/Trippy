@@ -39,6 +39,8 @@ function findBestMatch(itemsList, input) {
     if (partial.length > 1) return partial[0];
 
     // Fuzzy (light)
+    if (normalized.length < 3) return null;
+
     let best = null;
     let bestScore = Infinity;
 
@@ -72,25 +74,36 @@ module.exports = {
             option.setName('item')
                 .setDescription('Start typing item...')
                 .setRequired(true)
-                .setAutocomplete(true) // 🔥 ENABLE AUTOCOMPLETE
+                .setAutocomplete(true)
         ),
 
     /* ------------------ AUTOCOMPLETE ------------------ */
     async autocomplete(interaction) {
-        const focused = interaction.options.getFocused().toLowerCase();
-        const items = cache.getItems();
+        try {
+            const focused = interaction.options.getFocused().toLowerCase();
+            const items = cache.getItems();
 
-        if (!items.length) return;
+            if (!items.length) {
+                return interaction.respond([]);
+            }
 
-        const results = items
-            .filter(i => i.name.toLowerCase().includes(focused))
-            .slice(0, 25)
-            .map(i => ({
-                name: i.name,
-                value: i.name
-            }));
+            if (!focused || focused.length < 1) {
+                return interaction.respond([]);
+            }
 
-        await interaction.respond(results);
+            const results = items
+                .filter(i => i.name.toLowerCase().includes(focused))
+                .slice(0, 25)
+                .map(i => ({
+                    name: i.name,
+                    value: i.name
+                }));
+
+            await interaction.respond(results);
+
+        } catch (err) {
+            console.error("AUTOCOMPLETE ERROR:", err);
+        }
     },
 
     /* ------------------ EXECUTE ------------------ */
@@ -128,9 +141,9 @@ module.exports = {
                 .setColor(tier.color)
                 .setTitle(`${tier.emoji} ${item.name}`)
                 .addFields(
-                    { name: "Buy", value: `${buy.toLocaleString()} gp`, inline: true },
-                    { name: "Sell", value: `${sell.toLocaleString()} gp`, inline: true },
-                    { name: "Average", value: `${avg.toLocaleString()} gp` }
+                    { name: "📈 Buy", value: `${buy.toLocaleString()} gp`, inline: true },
+                    { name: "📉 Sell", value: `${sell.toLocaleString()} gp`, inline: true },
+                    { name: "📊 Average", value: `${avg.toLocaleString()} gp` }
                 )
                 .setFooter({ text: tier.label })
                 .setTimestamp();
