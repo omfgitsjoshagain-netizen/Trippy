@@ -1,10 +1,59 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const cache = require('../cache');
 
-/* ------------------ MATCH ------------------ */
-function findItem(items, input) {
-    const name = input.toLowerCase();
-    return items.find(i => i.name.toLowerCase().includes(name));
+/* ------------------ LEVENSHTEIN ------------------ */
+function levenshtein(a, b) {
+    const matrix = [];
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b[i - 1] === a[j - 1]) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1,
+                    matrix[i][j - 1] + 1,
+                    matrix[i - 1][j] + 1
+                );
+            }
+        }
+    }
+    return matrix[b.length][a.length];
+}
+
+/* ------------------ HYBRID MATCH ------------------ */
+function findBestMatch(items, input) {
+    const normalized = input.toLowerCase().trim();
+
+    // Exact match
+    const exact = items.find(i => i.name.toLowerCase() === normalized);
+    if (exact) return exact;
+
+    // Partial match
+    const partial = items.filter(i =>
+        i.name.toLowerCase().includes(normalized)
+    );
+    if (partial.length === 1) return partial[0];
+    if (partial.length > 1) return partial[0];
+
+    // Fuzzy fallback
+    if (normalized.length < 3) return null;
+
+    let best = null;
+    let bestScore = Infinity;
+
+    for (const item of items) {
+        const score = levenshtein(normalized, item.name.toLowerCase());
+        if (score < bestScore) {
+            bestScore = score;
+            best = item;
+        }
+    }
+
+    const max = Math.floor(normalized.length * 0.3);
+    return bestScore <= max ? best : null;
 }
 
 /* ------------------ AI SCORE ------------------ */
@@ -22,12 +71,12 @@ function getAIScore(percent, margin, price) {
     else if (margin >= 100_000) score += 15;
     else if (margin >= 10_000) score += 5;
 
-    // Price stability
+    // Price tier (stability)
     if (price >= 10_000_000) score += 20;
     else if (price >= 1_000_000) score += 10;
 
-    // Spread sanity (fake margin check)
-    if (percent > 15) score -= 20; // likely unstable
+    // Fake margin protection
+    if (percent > 15) score -= 20;
 
     return Math.max(0, Math.min(score, 100));
 }
@@ -53,7 +102,7 @@ module.exports = {
         .setDescription('🧠 AI flip prediction system')
         .addStringOption(option =>
             option.setName('item')
-                .setDescription('Item name')
+                .setDescription('Item name (typos allowed)')
                 .setRequired(true)
         ),
 
@@ -67,19 +116,19 @@ module.exports = {
             const prices = cache.getPrices();
 
             if (!items.length || !Object.keys(prices).length) {
-                return interaction.editReply('⏳ Loading market...');
+                return interaction.editReply('⏳ Loading market data...');
             }
 
-            const item = findItem(items, input);
+            const item = findBestMatch(items, input);
 
             if (!item) {
-                return interaction.editReply('❌ Item not found.');
+                return interaction.editReply(`❌ Item not found: ${input}`);
             }
 
             const price = prices[item.id];
 
             if (!price || !price.high || !price.low) {
-                return interaction.editReply('❌ Price unavailable.');
+                return interaction.editReply('❌ Price data unavailable.');
             }
 
             const buy = price.high;
@@ -113,7 +162,7 @@ module.exports = {
         } catch (error) {
             console.error("AI FLIP ERROR:", error);
 
-            if (interaction.deferred) {
+            if (interaction.deferred || interaction.replied) {
                 await interaction.editReply('❌ Error predicting flip.');
             } else {
                 await interaction.reply({
