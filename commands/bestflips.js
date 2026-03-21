@@ -15,6 +15,21 @@ function getTier(percent) {
     return "❌ BAD";
 }
 
+/* ------------------ VOLATILITY SYSTEM ------------------ */
+function getVolatility(price) {
+    const now = Date.now() / 1000;
+
+    const buyAge = now - (price.highTime || 0);
+    const sellAge = now - (price.lowTime || 0);
+
+    const avg = (buyAge + sellAge) / 2;
+
+    if (avg < 60) return "⚡ FAST";
+    if (avg < 300) return "🔥 ACTIVE";
+    if (avg < 900) return "🧊 SLOW";
+    return "💀 DEAD";
+}
+
 /* ------------------ REAL TRADE ZONES ------------------ */
 function getTradeZones(price) {
     const low = price.low;
@@ -55,7 +70,7 @@ function getTradeZones(price) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('bestflips')
-        .setDescription('🔥 Realistic flip finder (zone-based)')
+        .setDescription('🔥 Flip scanner (zones + volatility)')
         .addStringOption(option =>
             option.setName('mode')
                 .setDescription('Sorting mode')
@@ -93,11 +108,13 @@ module.exports = {
             const zone = getTradeZones(price);
             if (!zone) continue;
 
+            const volatility = getVolatility(price);
+
             const { entry, exit, profit, percent } = zone;
 
             if (budget && entry > budget) continue;
 
-            /* 🔥 FILTER */
+            /* 🔥 FILTERS */
             if (profit < 2000) continue;
             if (percent < 1.2) continue;
             if (entry < 5000) continue;
@@ -107,12 +124,13 @@ module.exports = {
             flips.push({
                 name: item.name,
                 ...zone,
+                volatility,
                 cycle: profit * limit,
                 inv: profit * 28
             });
         }
 
-        /* ------------------ SORTING ------------------ */
+        /* ------------------ SORT ------------------ */
 
         if (mode === 'profit') {
             flips.sort((a, b) => b.cycle - a.cycle);
@@ -137,25 +155,25 @@ module.exports = {
 
         const lines = top.map((f, i) =>
             `${getRank(i)} **${f.name}**\n` +
-            `└ 🎯 Buy Zone: ${f.buyMin.toLocaleString()} - ${f.buyMax.toLocaleString()}\n` +
-            `└ 🎯 Sell Zone: ${f.sellMin.toLocaleString()} - ${f.sellMax.toLocaleString()}\n` +
-            `└ 💡 Suggested: ${f.entry.toLocaleString()} → ${f.exit.toLocaleString()}\n` +
-            `└ 💰 Profit: ${f.profit.toLocaleString()} gp (${f.percent.toFixed(2)}%)\n` +
-            `└ 🎒 Inv: ${f.inv.toLocaleString()} gp\n` +
-            `└ ⚡ Cycle: ${f.cycle.toLocaleString()} gp\n` +
+            `└ 🎯 Buy: ${f.buyMin.toLocaleString()} - ${f.buyMax.toLocaleString()}\n` +
+            `└ 🎯 Sell: ${f.sellMin.toLocaleString()} - ${f.sellMax.toLocaleString()}\n` +
+            `└ 💡 ${f.entry.toLocaleString()} → ${f.exit.toLocaleString()}\n` +
+            `└ 💰 ${f.profit.toLocaleString()} gp (${f.percent.toFixed(2)}%)\n` +
+            `└ ⚡ ${f.volatility}\n` +
+            `└ 🎒 ${f.inv.toLocaleString()} | ⚡ ${f.cycle.toLocaleString()}\n` +
             `└ 🚦 ${getTier(f.percent)}`
         );
 
         const embed = new EmbedBuilder()
             .setColor(0x00FFAA)
-            .setTitle('🔥 BEST FLIPS — REAL MARKET MODE')
+            .setTitle('🔥 BEST FLIPS — VOLATILITY ENGINE')
             .setDescription(lines.join('\n\n'))
             .addFields({
                 name: "⚙️ Mode",
                 value: `**${mode.toUpperCase()}**`,
                 inline: true
             })
-            .setFooter({ text: 'TFTP Zone-Based Flip Engine' })
+            .setFooter({ text: 'TFTP Smart Flip System' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
