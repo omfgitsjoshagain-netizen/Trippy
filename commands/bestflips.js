@@ -10,7 +10,6 @@ function getTier(percent) {
     return "❌ BAD";
 }
 
-/* ------------------ RANK ------------------ */
 function getRankIcon(i) {
     if (i === 0) return "🥇";
     if (i === 1) return "🥈";
@@ -18,54 +17,10 @@ function getRankIcon(i) {
     return `#${i + 1}`;
 }
 
-/* ------------------ VOLUME SCORE ------------------ */
-function getVolumeScore(highTime, lowTime) {
-    const now = Date.now() / 1000;
-
-    const lastBuy = now - (highTime || 0);
-    const lastSell = now - (lowTime || 0);
-
-    const avg = (lastBuy + lastSell) / 2;
-
-    if (avg < 60) return { score: 100, label: "🔥 VERY HIGH" };
-    if (avg < 300) return { score: 80, label: "⚡ HIGH" };
-    if (avg < 900) return { score: 60, label: "👍 MEDIUM" };
-    if (avg < 3600) return { score: 30, label: "⚠️ LOW" };
-    return { score: 10, label: "❌ DEAD" };
-}
-
-/* ------------------ FLIP SCORE ------------------ */
-function getFlipScore(percent, margin, volumeScore) {
-    let score = 0;
-
-    // Margin %
-    if (percent >= 8) score += 40;
-    else if (percent >= 5) score += 30;
-    else if (percent >= 3) score += 20;
-    else if (percent >= 1) score += 10;
-
-    // Raw profit
-    if (margin >= 1_000_000) score += 30;
-    else if (margin >= 100_000) score += 20;
-    else if (margin >= 10_000) score += 10;
-
-    // Volume weight
-    score += volumeScore * 0.3;
-
-    return Math.min(100, Math.floor(score));
-}
-
-/* ------------------ HOT DETECTOR ------------------ */
-function isHotFlip(score, volumeScore) {
-    return score >= 70 && volumeScore >= 60;
-}
-
-/* ------------------ COMMAND ------------------ */
-
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('bestflips')
-        .setDescription('🔥 AI + Volume Flip Scanner')
+        .setDescription('🔥 Flip scanner with buy/sell guidance')
         .addStringOption(option =>
             option.setName('mode')
                 .setDescription('Sorting mode')
@@ -95,32 +50,25 @@ module.exports = {
             const price = prices[item.id];
             if (!price || !price.high || !price.low) continue;
 
-            const buy = price.high;
-            const sell = price.low;
+            const buyPrice = price.low;   // 📉 YOU BUY HERE
+            const sellPrice = price.high; // 📈 YOU SELL HERE
 
-            if (buy <= 0 || sell <= 0) continue;
+            if (buyPrice <= 0 || sellPrice <= 0) continue;
 
-            const margin = buy - sell;
-            const percent = (margin / sell) * 100;
+            const margin = sellPrice - buyPrice;
+            const percent = (margin / buyPrice) * 100;
 
             if (margin < 1000 || percent < 1) continue;
 
             const buyLimit = item.limit || 100;
 
-            /* 🔥 VOLUME */
-            const volume = getVolumeScore(price.highTime, price.lowTime);
-
-            /* 🧠 SCORE */
-            const score = getFlipScore(percent, margin, volume.score);
-
             flips.push({
                 name: item.name,
+                buyPrice,
+                sellPrice,
                 margin,
                 percent,
                 buyLimit,
-                volume,
-                score,
-                hot: isHotFlip(score, volume.score),
                 profitCycle: margin * buyLimit
             });
         }
@@ -131,7 +79,7 @@ module.exports = {
         } else if (mode === 'margin') {
             flips.sort((a, b) => b.percent - a.percent);
         } else {
-            flips.sort((a, b) => b.score - a.score);
+            flips.sort((a, b) => b.percent * b.margin - a.percent * a.margin);
         }
 
         const top = flips.slice(0, 10);
@@ -140,22 +88,25 @@ module.exports = {
             return interaction.editReply('❌ No flips found.');
         }
 
+        /* ------------------ FORMAT ------------------ */
+
         const lines = top.map((f, i) => {
             return (
-                `${getRankIcon(i)} ${f.hot ? "🔥" : ""} **${f.name}**\n` +
-                `└ 💰 ${f.margin.toLocaleString()} gp • ${f.percent.toFixed(2)}%\n` +
-                `└ ⚡ Vol: ${f.volume.label}\n` +
+                `${getRankIcon(i)} **${f.name}**\n` +
+                `└ 📉 Buy: **${f.buyPrice.toLocaleString()} gp**\n` +
+                `└ 📈 Sell: **${f.sellPrice.toLocaleString()} gp**\n` +
+                `└ 💰 Profit: ${f.margin.toLocaleString()} gp (${f.percent.toFixed(2)}%)\n` +
                 `└ 📦 Limit: ${f.buyLimit}\n` +
-                `└ 💸 Cycle: ${f.profitCycle.toLocaleString()} gp\n` +
-                `└ 🧠 Score: ${f.score}/100 • ${getTier(f.percent)}`
+                `└ ⚡ Cycle: ${f.profitCycle.toLocaleString()} gp\n` +
+                `└ 🚦 ${getTier(f.percent)}`
             );
         });
 
         const embed = new EmbedBuilder()
             .setColor(0x00FFAA)
-            .setTitle('🔥 BEST FLIPS — AI + VOLUME ENGINE')
+            .setTitle('🔥 BEST FLIPS — BUY & SELL GUIDE')
             .setDescription(lines.join('\n\n'))
-            .setFooter({ text: 'TFTP Smart Flip System v3' })
+            .setFooter({ text: 'TFTP Flip Assistant' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
