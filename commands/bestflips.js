@@ -2,92 +2,86 @@ const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const cache = require('../cache');
 
 /* ------------------ TIER ------------------ */
-function getTier(percent) {
-    if (percent >= 8) return "🔥 INSANE";
-    if (percent >= 5) return "💎 ELITE";
-    if (percent >= 3) return "👍 GOOD";
-    if (percent >= 1) return "⚠️ SAFE";
-    return "❌ BAD";
+function getTier(score) {
+    if (score >= 85) return "🔥 GOD FLIP";
+    if (score >= 70) return "💎 ELITE";
+    if (score >= 55) return "👍 GOOD";
+    if (score >= 40) return "⚠️ DECENT";
+    return "❌ AVOID";
 }
 
 /* ------------------ RANK ------------------ */
-function getRankIcon(i) {
-    if (i === 0) return "🥇";
-    if (i === 1) return "🥈";
-    if (i === 2) return "🥉";
-    return `#${i + 1}`;
+function getRank(i) {
+    return ["🥇", "🥈", "🥉"][i] || `#${i + 1}`;
 }
 
 /* ------------------ VOLUME ------------------ */
-function getVolumeLevel(highTime, lowTime) {
+function getVolume(price) {
     const now = Date.now() / 1000;
 
-    const lastBuy = now - (highTime || 0);
-    const lastSell = now - (lowTime || 0);
+    const buyAge = now - (price.highTime || 0);
+    const sellAge = now - (price.lowTime || 0);
 
-    const avg = (lastBuy + lastSell) / 2;
+    const avg = (buyAge + sellAge) / 2;
 
-    if (avg < 60) return "🔥 HIGH";
-    if (avg < 300) return "⚡ MEDIUM";
-    if (avg < 900) return "⚠️ LOW";
-    return "❌ DEAD";
+    if (avg < 60) return { score: 100, label: "🔥 HIGH" };
+    if (avg < 300) return { score: 80, label: "⚡ MEDIUM" };
+    if (avg < 900) return { score: 60, label: "👍 LOW" };
+    return { score: 20, label: "❌ DEAD" };
 }
 
-/* ------------------ TREND DETECTION ------------------ */
+/* ------------------ TREND ------------------ */
 function getTrend(price) {
-    const high = price.high || 0;
-    const low = price.low || 0;
+    const spread = price.high - price.low;
+    const percent = (spread / price.low) * 100;
 
-    if (!high || !low) return "UNKNOWN";
-
-    const spread = high - low;
-    const percent = (spread / low) * 100;
-
-    if (percent > 5) return "📈 RISING";
-    if (percent < 1.5) return "📉 FALLING";
-    return "➡️ STABLE";
+    if (percent > 5) return { score: 20, label: "📈 RISING" };
+    if (percent < 1.5) return { score: -10, label: "📉 FALLING" };
+    return { score: 5, label: "➡️ STABLE" };
 }
 
-/* ------------------ ADAPTIVE PRICING ------------------ */
-function getAdaptivePrices(priceData) {
-    const low = priceData.low;
-    const high = priceData.high;
+/* ------------------ REAL PRICES ------------------ */
+function getRealisticPrices(price) {
+    const low = price.low;
+    const high = price.high;
 
     const spread = high - low;
-    const volume = getVolumeLevel(priceData.highTime, priceData.lowTime);
+    if (spread <= 0) return null;
 
-    let buyMult = 1.0;
-    let sellMult = 1.0;
+    let buy, sell;
 
-    if (volume.includes("HIGH")) {
-        buyMult = 1.005;
-        sellMult = 0.995;
-    } else if (volume.includes("MEDIUM")) {
-        buyMult = 1.01;
-        sellMult = 0.99;
-    } else if (volume.includes("LOW")) {
-        buyMult = 1.02;
-        sellMult = 0.98;
+    if (spread < 5000) {
+        buy = low + 1;
+        sell = high - 1;
+    } else if (spread < 50000) {
+        buy = low + Math.floor(spread * 0.1);
+        sell = high - Math.floor(spread * 0.1);
     } else {
-        buyMult = 1.03;
-        sellMult = 0.97;
+        buy = low + Math.floor(spread * 0.2);
+        sell = high - Math.floor(spread * 0.2);
     }
 
-    if (spread > 100_000) {
-        buyMult += 0.005;
-        sellMult -= 0.005;
-    }
+    if (sell <= buy) return null;
 
-    if (spread < 10_000) {
-        buyMult = 1.002;
-        sellMult = 0.998;
-    }
+    return { buyPrice: buy, sellPrice: sell, spread };
+}
 
-    return {
-        buyPrice: Math.floor(low * buyMult),
-        sellPrice: Math.floor(high * sellMult),
-        volume
-    };
+/* ------------------ AI SCORE ------------------ */
+function getScore(percent, margin, volume, trend) {
+    let score = 0;
+
+    if (percent >= 5) score += 30;
+    else if (percent >= 3) score += 20;
+    else if (percent >= 1) score += 10;
+
+    if (margin >= 1000000) score += 30;
+    else if (margin >= 100000) score += 20;
+    else if (margin >= 10000) score += 10;
+
+    score += volume.score * 0.3;
+    score += trend.score;
+
+    return Math.min(100, Math.floor(score));
 }
 
 /* ------------------ COMMAND ------------------ */
@@ -95,21 +89,10 @@ function getAdaptivePrices(priceData) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('bestflips')
-        .setDescription('🔥 Smart Flip Scanner (AI + Trend + Volume)')
-        .addStringOption(option =>
-            option.setName('mode')
-                .setDescription('Sorting mode')
-                .addChoices(
-                    { name: 'Best Overall', value: 'score' },
-                    { name: 'High Profit', value: 'profit' },
-                    { name: 'High %', value: 'margin' }
-                )
-        ),
+        .setDescription('🔥 GOD MODE Flip Predictor'),
 
     async execute(interaction) {
         await interaction.deferReply();
-
-        const mode = interaction.options.getString('mode') || 'score';
 
         const items = cache.getItems();
         const prices = cache.getPrices();
@@ -125,26 +108,22 @@ module.exports = {
             const price = prices[item.id];
             if (!price || !price.high || !price.low) continue;
 
-            const { buyPrice, sellPrice, volume } = getAdaptivePrices(price);
+            const pricing = getRealisticPrices(price);
+            if (!pricing) continue;
 
-            if (buyPrice <= 0 || sellPrice <= 0) continue;
+            const { buyPrice, sellPrice, spread } = pricing;
 
             const margin = sellPrice - buyPrice;
             const percent = (margin / buyPrice) * 100;
 
             if (margin < 1000 || percent < 1) continue;
 
+            const volume = getVolume(price);
             const trend = getTrend(price);
-            const buyLimit = item.limit || 100;
 
-            /* 🧠 SCORE */
-            let score = percent * 5;
+            const score = getScore(percent, margin, volume, trend);
 
-            if (trend.includes("RISING")) score += 20;
-            if (trend.includes("FALLING")) score -= 20;
-
-            if (volume.includes("HIGH")) score += 20;
-            if (volume.includes("LOW")) score -= 10;
+            const limit = item.limit || 100;
 
             flips.push({
                 name: item.name,
@@ -152,47 +131,32 @@ module.exports = {
                 sellPrice,
                 margin,
                 percent,
-                trend,
                 volume,
+                trend,
                 score,
-                profitCycle: margin * buyLimit
+                cycle: margin * limit
             });
         }
 
-        /* ------------------ SORT ------------------ */
-        if (mode === 'profit') {
-            flips.sort((a, b) => b.profitCycle - a.profitCycle);
-        } else if (mode === 'margin') {
-            flips.sort((a, b) => b.percent - a.percent);
-        } else {
-            flips.sort((a, b) => b.score - a.score);
-        }
+        flips.sort((a, b) => b.score - a.score);
 
         const top = flips.slice(0, 10);
 
-        if (!top.length) {
-            return interaction.editReply('❌ No flips found.');
-        }
-
-        /* ------------------ DISPLAY ------------------ */
-
-        const lines = top.map((f, i) => {
-            return (
-                `${getRankIcon(i)} **${f.name}**\n` +
-                `└ 📉 Buy: ${f.buyPrice.toLocaleString()} gp\n` +
-                `└ 📈 Sell: ${f.sellPrice.toLocaleString()} gp\n` +
-                `└ 💰 Profit: ${f.margin.toLocaleString()} (${f.percent.toFixed(2)}%)\n` +
-                `└ 📊 ${f.trend} • ${f.volume}\n` +
-                `└ ⚡ Cycle: ${f.profitCycle.toLocaleString()} gp\n` +
-                `└ 🧠 Score: ${Math.floor(f.score)} • ${getTier(f.percent)}`
-            );
-        });
+        const lines = top.map((f, i) =>
+            `${getRank(i)} **${f.name}**\n` +
+            `└ 📉 Buy: ${f.buyPrice.toLocaleString()}\n` +
+            `└ 📈 Sell: ${f.sellPrice.toLocaleString()}\n` +
+            `└ 💰 Profit: ${f.margin.toLocaleString()} (${f.percent.toFixed(2)}%)\n` +
+            `└ 📊 ${f.trend.label} • ${f.volume.label}\n` +
+            `└ ⚡ Cycle: ${f.cycle.toLocaleString()}\n` +
+            `└ 🧠 ${f.score}/100 • ${getTier(f.score)}`
+        );
 
         const embed = new EmbedBuilder()
             .setColor(0x00FFAA)
-            .setTitle('🔥 BEST FLIPS — SMART ENGINE v4')
+            .setTitle('🔥 GOD MODE FLIP PREDICTOR')
             .setDescription(lines.join('\n\n'))
-            .setFooter({ text: 'TFTP AI Flip System' })
+            .setFooter({ text: 'TFTP AI Trading Engine' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
