@@ -1,35 +1,49 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const cache = require('../cache');
 
-/* ------------------ SCORE ------------------ */
-function getSnipeScore(percent, margin, price) {
-    let score = 0;
-
-    // Undervalue %
-    if (percent >= 10) score += 40;
-    else if (percent >= 6) score += 30;
-    else if (percent >= 3) score += 20;
-    else if (percent >= 1) score += 10;
-
-    // Margin size
-    if (margin >= 1_000_000) score += 30;
-    else if (margin >= 100_000) score += 20;
-    else if (margin >= 10_000) score += 10;
-
-    // Price tier (avoid junk)
-    if (price >= 10_000_000) score += 30;
-    else if (price >= 1_000_000) score += 20;
-    else if (price >= 100_000) score += 10;
-
-    return Math.min(score, 100);
+/* ------------------ RANK ------------------ */
+function getRank(i) {
+    return ["🥇", "🥈", "🥉"][i] || `#${i + 1}`;
 }
 
-/* ------------------ LABEL ------------------ */
-function getLabel(score) {
-    if (score >= 90) return "🔥 GOD SNIPE";
-    if (score >= 70) return "💎 ELITE SNIPE";
-    if (score >= 50) return "🎯 GOOD SNIPE";
-    return "⚠️ WEAK SNIPE";
+/* ------------------ REALISTIC PRICING ------------------ */
+function getRealisticMid(price) {
+    const low = price.low;
+    const high = price.high;
+
+    if (!low || !high || high <= low) return null;
+
+    const spread = high - low;
+
+    // realistic mid price (not average, but tradable range)
+    const mid = low + (spread * 0.5);
+
+    return Math.floor(mid);
+}
+
+/* ------------------ SNIPE DETECTION ------------------ */
+function getSnipeData(price) {
+    const low = price.low;
+    const high = price.high;
+
+    if (!low || !high || high <= low) return null;
+
+    const spread = high - low;
+
+    if (spread < 2000) return null; // skip trash
+
+    const realisticMid = getRealisticMid(price);
+
+    const discount = realisticMid - low;
+    const percent = (discount / realisticMid) * 100;
+
+    return {
+        buyPrice: low,
+        expectedSell: Math.floor(high * 0.98), // realistic sell
+        discount,
+        percent,
+        spread
+    };
 }
 
 /* ------------------ COMMAND ------------------ */
@@ -40,85 +54,68 @@ module.exports = {
         .setDescription('🎯 Find underpriced OSRS items'),
 
     async execute(interaction) {
-        try {
-            await interaction.deferReply();
+        await interaction.deferReply();
 
-            const items = cache.getItems();
-            const prices = cache.getPrices();
+        const items = cache.getItems();
+        const prices = cache.getPrices();
 
-            if (!items.length || !Object.keys(prices).length) {
-                return interaction.editReply('⏳ Scanning market...');
-            }
-
-            const snipes = [];
-
-            for (const item of items) {
-
-                const price = prices[item.id];
-                if (!price || !price.high || !price.low) continue;
-
-                const buy = price.high;
-                const sell = price.low;
-
-                if (buy <= 0 || sell <= 0) continue;
-
-                const average = (buy + sell) / 2;
-                const margin = buy - sell;
-
-                const undervalue = ((average - sell) / average) * 100;
-
-                // 🔥 FILTER TRASH
-                if (undervalue < 2) continue;
-                if (margin < 5000) continue;
-                if (buy < 10000) continue;
-
-                const score = getSnipeScore(undervalue, margin, buy);
-
-                snipes.push({
-                    name: item.name,
-                    margin,
-                    undervalue,
-                    score,
-                    price: buy
-                });
-            }
-
-            // 🔥 SORT BEST SNIPES
-            snipes.sort((a, b) => b.score - a.score);
-
-            const top = snipes.slice(0, 10);
-
-            if (!top.length) {
-                return interaction.editReply('❌ No snipes found.');
-            }
-
-            const lines = top.map((s, i) => {
-                return `**${i + 1}. ${s.name}**\n` +
-                       `💰 ${s.margin.toLocaleString()} gp\n` +
-                       `📉 ${s.undervalue.toFixed(2)}% undervalued\n` +
-                       `🧠 Score: ${s.score}/100 | ${getLabel(s.score)}\n`;
-            });
-
-            const embed = new EmbedBuilder()
-                .setColor(0xFF00FF)
-                .setTitle('🎯 OSRS SNIPER SYSTEM')
-                .setDescription(lines.join('\n'))
-                .setFooter({ text: 'TFTP Sniper Engine' })
-                .setTimestamp();
-
-            await interaction.editReply({ embeds: [embed] });
-
-        } catch (error) {
-            console.error("SNIPE ERROR:", error);
-
-            if (interaction.deferred) {
-                await interaction.editReply('❌ Error scanning snipes.');
-            } else {
-                await interaction.reply({
-                    content: '❌ Error scanning snipes.',
-                    ephemeral: true
-                });
-            }
+        if (!items.length || !Object.keys(prices).length) {
+            return interaction.editReply('⏳ Loading market...');
         }
+
+        const snipes = [];
+
+        for (const item of items) {
+
+            const price = prices[item.id];
+            if (!price) continue;
+
+            const snipe = getSnipeData(price);
+            if (!snipe) continue;
+
+            const { buyPrice, expectedSell, discount, percent } = snipe;
+
+            // 🔥 STRICT SNIPE FILTERS
+            if (discount < 5000) continue;
+            if (percent < 2) continue;
+
+            const profit = expectedSell - buyPrice;
+
+            if (profit <= 0) continue;
+
+            snipes.push({
+                name: item.name,
+                buyPrice,
+                sellPrice: expectedSell,
+                profit,
+                percent
+            });
+        }
+
+        /* ------------------ SORT ------------------ */
+        snipes.sort((a, b) => b.percent - a.percent);
+
+        const top = snipes.slice(0, 10);
+
+        if (!top.length) {
+            return interaction.editReply('❌ No snipes found.');
+        }
+
+        const lines = top.map((s, i) =>
+            `${getRank(i)} **${s.name}**\n` +
+            `└ 🎯 Snipe Buy: ${s.buyPrice.toLocaleString()} gp\n` +
+            `└ 📈 Quick Sell: ${s.sellPrice.toLocaleString()} gp\n` +
+            `└ 💰 Profit: ${s.profit.toLocaleString()} gp\n` +
+            `└ ⚡ Undervalued: ${s.percent.toFixed(2)}%`
+        );
+
+        const embed = new EmbedBuilder()
+            .setColor(0xFF4444)
+            .setTitle('🎯 SNIPE OPPORTUNITIES — REALISTIC')
+            .setDescription(lines.join('\n\n'))
+            .setFooter({ text: 'TFTP Sniper System' })
+            .setTimestamp();
+
+        await interaction.editReply({ embeds: [embed] });
     }
 };
