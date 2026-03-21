@@ -10,6 +10,14 @@ function getTier(percent) {
     return "❌ BAD";
 }
 
+/* ------------------ MEDALS ------------------ */
+function getRankIcon(index) {
+    if (index === 0) return "🥇";
+    if (index === 1) return "🥈";
+    if (index === 2) return "🥉";
+    return `#${index + 1}`;
+}
+
 /* ------------------ COMMAND ------------------ */
 
 module.exports = {
@@ -47,7 +55,6 @@ module.exports = {
             const flips = [];
 
             for (const item of items) {
-
                 const price = prices[item.id];
                 if (!price || !price.high || !price.low) continue;
 
@@ -55,37 +62,28 @@ module.exports = {
                 const sell = price.low;
 
                 if (buy <= 0 || sell <= 0) continue;
-
-                // 💰 Budget filter
                 if (budget && buy > budget) continue;
 
                 const margin = buy - sell;
                 const percent = (margin / sell) * 100;
 
-                // 🔥 HARD FILTERS
                 if (margin < 1000) continue;
                 if (percent < 1) continue;
                 if (buy < 5000) continue;
-
-                const profitEach = margin;
-                const profitInv = margin * 28;
-                const profitCycle = margin * 100; // estimate GE limit
 
                 flips.push({
                     name: item.name,
                     margin,
                     percent,
                     buy,
-                    profitEach,
-                    profitInv,
-                    profitCycle
+                    profitInv: margin * 28,
+                    profitCycle: margin * 100
                 });
             }
 
-            /* ------------------ SORT MODES ------------------ */
-
+            /* ------------------ SORT ------------------ */
             if (mode === 'profit') {
-                flips.sort((a, b) => b.profitEach - a.profitEach);
+                flips.sort((a, b) => b.margin - a.margin);
             } else if (mode === 'safe') {
                 flips.sort((a, b) => a.percent - b.percent);
             } else {
@@ -98,24 +96,35 @@ module.exports = {
                 return interaction.editReply('❌ No flips found.');
             }
 
+            /* ------------------ FORMAT OUTPUT ------------------ */
+
             const lines = top.map((f, i) => {
-                return `**${i + 1}. ${f.name}**\n` +
-                       `💰 ${f.margin.toLocaleString()} gp | ${f.percent.toFixed(2)}%\n` +
-                       `🎒 Inv: ${f.profitInv.toLocaleString()} gp\n` +
-                       `📦 Cycle: ${f.profitCycle.toLocaleString()} gp\n` +
-                       `🚦 ${getTier(f.percent)}\n`;
+                return (
+                    `${getRankIcon(i)} **${f.name}**\n` +
+                    `└ 💰 **${f.margin.toLocaleString()} gp** • ${f.percent.toFixed(2)}%\n` +
+                    `└ 🎒 Inv: ${f.profitInv.toLocaleString()} gp\n` +
+                    `└ ⚡ Cycle: ${f.profitCycle.toLocaleString()} gp\n` +
+                    `└ 🚦 ${getTier(f.percent)}`
+                );
             });
 
             const embed = new EmbedBuilder()
                 .setColor(0x00FFAA)
-                .setTitle('🔥 BEST FLIPS (PRO MODE)')
-                .setDescription(lines.join('\n'))
-                .addFields({
-                    name: "⚙️ Mode",
-                    value: mode.toUpperCase(),
-                    inline: true
-                })
-                .setFooter({ text: 'TFTP Flip Engine v2' })
+                .setTitle('🔥 BEST FLIPS — PRO SCANNER')
+                .setDescription(lines.join('\n\n'))
+                .addFields(
+                    {
+                        name: "📊 Mode",
+                        value: `**${mode.toUpperCase()}**`,
+                        inline: true
+                    },
+                    {
+                        name: "💰 Budget",
+                        value: budget ? `Up to ${budget.toLocaleString()} gp` : "Unlimited",
+                        inline: true
+                    }
+                )
+                .setFooter({ text: 'TFTP Flip Engine • Real-Time Scanner' })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
