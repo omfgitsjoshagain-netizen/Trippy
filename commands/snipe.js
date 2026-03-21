@@ -6,8 +6,8 @@ function getRank(i) {
     return ["🥇", "🥈", "🥉"][i] || `#${i + 1}`;
 }
 
-/* ------------------ REALISTIC PRICING ------------------ */
-function getRealisticMid(price) {
+/* ------------------ REAL MARKET ZONES ------------------ */
+function getTradeZones(price) {
     const low = price.low;
     const high = price.high;
 
@@ -15,34 +15,32 @@ function getRealisticMid(price) {
 
     const spread = high - low;
 
-    // realistic mid price (not average, but tradable range)
-    const mid = low + (spread * 0.5);
+    if (spread < 2000) return null;
 
-    return Math.floor(mid);
-}
+    /* 🔥 BUY ZONE (where you realistically get filled) */
+    const buyMin = low;
+    const buyMax = low + Math.floor(spread * 0.25);
 
-/* ------------------ SNIPE DETECTION ------------------ */
-function getSnipeData(price) {
-    const low = price.low;
-    const high = price.high;
+    /* 🔥 SELL ZONE (where items realistically sell) */
+    const sellMin = high - Math.floor(spread * 0.25);
+    const sellMax = high;
 
-    if (!low || !high || high <= low) return null;
+    /* 💰 EXPECTED FLIP (middle ground) */
+    const entry = Math.floor((buyMin + buyMax) / 2);
+    const exit = Math.floor((sellMin + sellMax) / 2);
 
-    const spread = high - low;
-
-    if (spread < 2000) return null; // skip trash
-
-    const realisticMid = getRealisticMid(price);
-
-    const discount = realisticMid - low;
-    const percent = (discount / realisticMid) * 100;
+    const profit = exit - entry;
+    const percent = (profit / entry) * 100;
 
     return {
-        buyPrice: low,
-        expectedSell: Math.floor(high * 0.98), // realistic sell
-        discount,
-        percent,
-        spread
+        buyMin,
+        buyMax,
+        sellMin,
+        sellMax,
+        entry,
+        exit,
+        profit,
+        percent
     };
 }
 
@@ -51,7 +49,7 @@ function getSnipeData(price) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('snipe')
-        .setDescription('🎯 Find underpriced OSRS items'),
+        .setDescription('🎯 REALISTIC OSRS sniper (price zones)'),
 
     async execute(interaction) {
         await interaction.deferReply();
@@ -70,50 +68,43 @@ module.exports = {
             const price = prices[item.id];
             if (!price) continue;
 
-            const snipe = getSnipeData(price);
-            if (!snipe) continue;
+            const zone = getTradeZones(price);
+            if (!zone) continue;
 
-            const { buyPrice, expectedSell, discount, percent } = snipe;
+            const { entry, exit, profit, percent } = zone;
 
-            // 🔥 STRICT SNIPE FILTERS
-            if (discount < 5000) continue;
+            /* 🔥 FILTER REAL SNIPES */
+            if (profit < 5000) continue;
             if (percent < 2) continue;
-
-            const profit = expectedSell - buyPrice;
-
-            if (profit <= 0) continue;
 
             snipes.push({
                 name: item.name,
-                buyPrice,
-                sellPrice: expectedSell,
-                profit,
-                percent
+                ...zone
             });
         }
 
-        /* ------------------ SORT ------------------ */
         snipes.sort((a, b) => b.percent - a.percent);
 
         const top = snipes.slice(0, 10);
 
         if (!top.length) {
-            return interaction.editReply('❌ No snipes found.');
+            return interaction.editReply('❌ No real snipes found.');
         }
 
         const lines = top.map((s, i) =>
             `${getRank(i)} **${s.name}**\n` +
-            `└ 🎯 Snipe Buy: ${s.buyPrice.toLocaleString()} gp\n` +
-            `└ 📈 Quick Sell: ${s.sellPrice.toLocaleString()} gp\n` +
+            `└ 🎯 Buy Zone: ${s.buyMin.toLocaleString()} - ${s.buyMax.toLocaleString()}\n` +
+            `└ 📈 Sell Zone: ${s.sellMin.toLocaleString()} - ${s.sellMax.toLocaleString()}\n` +
+            `└ 💡 Suggested: ${s.entry.toLocaleString()} → ${s.exit.toLocaleString()}\n` +
             `└ 💰 Profit: ${s.profit.toLocaleString()} gp\n` +
-            `└ ⚡ Undervalued: ${s.percent.toFixed(2)}%`
+            `└ ⚡ Edge: ${s.percent.toFixed(2)}%`
         );
 
         const embed = new EmbedBuilder()
             .setColor(0xFF4444)
-            .setTitle('🎯 SNIPE OPPORTUNITIES — REALISTIC')
+            .setTitle('🎯 SNIPE OPPORTUNITIES — REAL MARKET MODE')
             .setDescription(lines.join('\n\n'))
-            .setFooter({ text: 'TFTP Sniper System' })
+            .setFooter({ text: 'TFTP Sniper (Zone-Based Trading)' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
