@@ -15,7 +15,7 @@ function getTier(percent) {
     return "❌ BAD";
 }
 
-/* ------------------ REALISTIC PRICING ENGINE ------------------ */
+/* ------------------ REALISTIC PRICING ------------------ */
 function getRealisticPrices(price) {
     const low = price.low;
     const high = price.high;
@@ -27,26 +27,16 @@ function getRealisticPrices(price) {
     let buyPrice;
     let sellPrice;
 
-    /* 🔥 VERY SMALL SPREAD */
     if (spread <= 1000) {
         buyPrice = low;
         sellPrice = high;
-    }
-
-    /* ⚡ SMALL SPREAD */
-    else if (spread <= 10000) {
+    } else if (spread <= 10000) {
         buyPrice = low + Math.floor(spread * 0.05);
         sellPrice = high - Math.floor(spread * 0.05);
-    }
-
-    /* 💰 MEDIUM SPREAD */
-    else if (spread <= 100000) {
+    } else if (spread <= 100000) {
         buyPrice = low + Math.floor(spread * 0.1);
         sellPrice = high - Math.floor(spread * 0.1);
-    }
-
-    /* 🚀 LARGE SPREAD */
-    else {
+    } else {
         buyPrice = low + Math.floor(spread * 0.15);
         sellPrice = high - Math.floor(spread * 0.15);
     }
@@ -65,10 +55,27 @@ function getRealisticPrices(price) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('bestflips')
-        .setDescription('🔥 REALISTIC Flip Finder'),
+        .setDescription('🔥 Realistic flip finder with modes')
+        .addStringOption(option =>
+            option.setName('mode')
+                .setDescription('Sorting mode')
+                .addChoices(
+                    { name: 'Best Overall', value: 'score' },
+                    { name: 'High Profit GP', value: 'profit' },
+                    { name: 'High Margin %', value: 'margin' },
+                    { name: 'Safe Flips', value: 'safe' }
+                )
+        )
+        .addIntegerOption(option =>
+            option.setName('budget')
+                .setDescription('Max item price (optional)')
+        ),
 
     async execute(interaction) {
         await interaction.deferReply();
+
+        const mode = interaction.options.getString('mode') || 'score';
+        const budget = interaction.options.getInteger('budget');
 
         const items = cache.getItems();
         const prices = cache.getPrices();
@@ -88,17 +95,16 @@ module.exports = {
 
             const { buyPrice, sellPrice } = pricing;
 
+            if (budget && buyPrice > budget) continue;
+
             const margin = sellPrice - buyPrice;
             const percent = (margin / buyPrice) * 100;
 
-            /* 🔥 STRICT FILTERS (IMPORTANT) */
             if (margin < 2000) continue;
             if (percent < 1.2) continue;
             if (buyPrice < 5000) continue;
 
             const limit = item.limit || 100;
-            const cycle = margin * limit;
-            const inv = margin * 28;
 
             flips.push({
                 name: item.name,
@@ -106,13 +112,28 @@ module.exports = {
                 sellPrice,
                 margin,
                 percent,
-                cycle,
-                inv
+                cycle: margin * limit,
+                inv: margin * 28
             });
         }
 
-        /* 🔥 SORT BY BEST REAL PROFIT */
-        flips.sort((a, b) => (b.percent * b.margin) - (a.percent * a.margin));
+        /* ------------------ SORTING ------------------ */
+
+        if (mode === 'profit') {
+            flips.sort((a, b) => b.cycle - a.cycle);
+        } 
+        else if (mode === 'margin') {
+            flips.sort((a, b) => b.percent - a.percent);
+        } 
+        else if (mode === 'safe') {
+            flips.sort((a, b) => a.percent - b.percent);
+        } 
+        else {
+            // Best overall
+            flips.sort((a, b) =>
+                (b.margin * b.percent) - (a.margin * a.percent)
+            );
+        }
 
         const top = flips.slice(0, 10);
 
@@ -132,9 +153,14 @@ module.exports = {
 
         const embed = new EmbedBuilder()
             .setColor(0x00FFAA)
-            .setTitle('🔥 BEST FLIPS — REALISTIC MODE')
+            .setTitle('🔥 BEST FLIPS — REALISTIC + MODES')
             .setDescription(lines.join('\n\n'))
-            .setFooter({ text: 'TFTP Real Flip Engine' })
+            .addFields({
+                name: "⚙️ Mode",
+                value: `**${mode.toUpperCase()}**`,
+                inline: true
+            })
+            .setFooter({ text: 'TFTP Flip Engine' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
