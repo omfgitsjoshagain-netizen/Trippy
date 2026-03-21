@@ -15,8 +15,8 @@ function getTier(percent) {
     return "❌ BAD";
 }
 
-/* ------------------ REALISTIC PRICING ------------------ */
-function getRealisticPrices(price) {
+/* ------------------ REAL TRADE ZONES ------------------ */
+function getTradeZones(price) {
     const low = price.low;
     const high = price.high;
 
@@ -24,29 +24,29 @@ function getRealisticPrices(price) {
 
     const spread = high - low;
 
-    let buyPrice;
-    let sellPrice;
+    if (spread < 2000) return null;
 
-    if (spread <= 1000) {
-        buyPrice = low;
-        sellPrice = high;
-    } else if (spread <= 10000) {
-        buyPrice = low + Math.floor(spread * 0.05);
-        sellPrice = high - Math.floor(spread * 0.05);
-    } else if (spread <= 100000) {
-        buyPrice = low + Math.floor(spread * 0.1);
-        sellPrice = high - Math.floor(spread * 0.1);
-    } else {
-        buyPrice = low + Math.floor(spread * 0.15);
-        sellPrice = high - Math.floor(spread * 0.15);
-    }
+    const buyMin = low;
+    const buyMax = low + Math.floor(spread * 0.25);
 
-    if (sellPrice <= buyPrice) return null;
+    const sellMin = high - Math.floor(spread * 0.25);
+    const sellMax = high;
+
+    const entry = Math.floor((buyMin + buyMax) / 2);
+    const exit = Math.floor((sellMin + sellMax) / 2);
+
+    const profit = exit - entry;
+    const percent = (profit / entry) * 100;
 
     return {
-        buyPrice,
-        sellPrice,
-        spread
+        buyMin,
+        buyMax,
+        sellMin,
+        sellMax,
+        entry,
+        exit,
+        profit,
+        percent
     };
 }
 
@@ -55,7 +55,7 @@ function getRealisticPrices(price) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('bestflips')
-        .setDescription('🔥 Realistic flip finder with modes')
+        .setDescription('🔥 Realistic flip finder (zone-based)')
         .addStringOption(option =>
             option.setName('mode')
                 .setDescription('Sorting mode')
@@ -90,30 +90,25 @@ module.exports = {
             const price = prices[item.id];
             if (!price) continue;
 
-            const pricing = getRealisticPrices(price);
-            if (!pricing) continue;
+            const zone = getTradeZones(price);
+            if (!zone) continue;
 
-            const { buyPrice, sellPrice } = pricing;
+            const { entry, exit, profit, percent } = zone;
 
-            if (budget && buyPrice > budget) continue;
+            if (budget && entry > budget) continue;
 
-            const margin = sellPrice - buyPrice;
-            const percent = (margin / buyPrice) * 100;
-
-            if (margin < 2000) continue;
+            /* 🔥 FILTER */
+            if (profit < 2000) continue;
             if (percent < 1.2) continue;
-            if (buyPrice < 5000) continue;
+            if (entry < 5000) continue;
 
             const limit = item.limit || 100;
 
             flips.push({
                 name: item.name,
-                buyPrice,
-                sellPrice,
-                margin,
-                percent,
-                cycle: margin * limit,
-                inv: margin * 28
+                ...zone,
+                cycle: profit * limit,
+                inv: profit * 28
             });
         }
 
@@ -129,9 +124,8 @@ module.exports = {
             flips.sort((a, b) => a.percent - b.percent);
         } 
         else {
-            // Best overall
             flips.sort((a, b) =>
-                (b.margin * b.percent) - (a.margin * a.percent)
+                (b.profit * b.percent) - (a.profit * a.percent)
             );
         }
 
@@ -143,9 +137,10 @@ module.exports = {
 
         const lines = top.map((f, i) =>
             `${getRank(i)} **${f.name}**\n` +
-            `└ 📉 Buy: ${f.buyPrice.toLocaleString()} gp\n` +
-            `└ 📈 Sell: ${f.sellPrice.toLocaleString()} gp\n` +
-            `└ 💰 Profit: ${f.margin.toLocaleString()} gp (${f.percent.toFixed(2)}%)\n` +
+            `└ 🎯 Buy Zone: ${f.buyMin.toLocaleString()} - ${f.buyMax.toLocaleString()}\n` +
+            `└ 🎯 Sell Zone: ${f.sellMin.toLocaleString()} - ${f.sellMax.toLocaleString()}\n` +
+            `└ 💡 Suggested: ${f.entry.toLocaleString()} → ${f.exit.toLocaleString()}\n` +
+            `└ 💰 Profit: ${f.profit.toLocaleString()} gp (${f.percent.toFixed(2)}%)\n` +
             `└ 🎒 Inv: ${f.inv.toLocaleString()} gp\n` +
             `└ ⚡ Cycle: ${f.cycle.toLocaleString()} gp\n` +
             `└ 🚦 ${getTier(f.percent)}`
@@ -153,14 +148,14 @@ module.exports = {
 
         const embed = new EmbedBuilder()
             .setColor(0x00FFAA)
-            .setTitle('🔥 BEST FLIPS — REALISTIC + MODES')
+            .setTitle('🔥 BEST FLIPS — REAL MARKET MODE')
             .setDescription(lines.join('\n\n'))
             .addFields({
                 name: "⚙️ Mode",
                 value: `**${mode.toUpperCase()}**`,
                 inline: true
             })
-            .setFooter({ text: 'TFTP Flip Engine' })
+            .setFooter({ text: 'TFTP Zone-Based Flip Engine' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
