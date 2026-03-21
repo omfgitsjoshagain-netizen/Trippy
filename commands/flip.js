@@ -1,28 +1,91 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const cache = require('../cache');
-const { findBestMatch } = require('../utils/matcher');
+
+/* ------------------ LEVENSHTEIN ------------------ */
+function levenshtein(a, b) {
+    const matrix = [];
+
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b[i - 1] === a[j - 1]) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1,
+                    matrix[i][j - 1] + 1,
+                    matrix[i - 1][j] + 1
+                );
+            }
+        }
+    }
+
+    return matrix[b.length][a.length];
+}
+
+/* ------------------ HYBRID MATCH ------------------ */
+function findBestMatch(items, input) {
+    if (!input) return null;
+
+    const normalized = input.toLowerCase().trim();
+
+    // Exact
+    const exact = items.find(i => i.name.toLowerCase() === normalized);
+    if (exact) return exact;
+
+    // Partial
+    const partial = items.filter(i =>
+        i.name.toLowerCase().includes(normalized)
+    );
+
+    if (partial.length === 1) return partial[0];
+
+    if (partial.length > 1) {
+        return partial.sort(
+            (a, b) =>
+                Math.abs(a.name.length - normalized.length) -
+                Math.abs(b.name.length - normalized.length)
+        )[0];
+    }
+
+    // Fuzzy
+    if (normalized.length < 3) return null;
+
+    let best = null;
+    let bestScore = Infinity;
+
+    for (const item of items) {
+        const score = levenshtein(normalized, item.name.toLowerCase());
+
+        if (score < bestScore) {
+            bestScore = score;
+            best = item;
+        }
+    }
+
+    const maxDistance = Math.floor(normalized.length * 0.3);
+    return bestScore <= maxDistance ? best : null;
+}
 
 /* ------------------ AI SCORE ------------------ */
 function calculateScore(percent, margin, price) {
     let score = 0;
 
-    // Margin %
     if (percent >= 8) score += 40;
     else if (percent >= 5) score += 30;
     else if (percent >= 3) score += 20;
     else if (percent >= 1) score += 10;
 
-    // Margin size
     if (margin >= 1_000_000) score += 30;
     else if (margin >= 100_000) score += 20;
     else if (margin >= 10_000) score += 10;
 
-    // Price tier (stability)
     if (price >= 10_000_000) score += 30;
     else if (price >= 1_000_000) score += 20;
     else if (price >= 100_000) score += 10;
 
-    // Fake margin protection
     if (percent > 15) score -= 20;
 
     return Math.max(0, Math.min(score, 100));
@@ -50,19 +113,12 @@ function getTier(score) {
     return "❌ BAD FLIP";
 }
 
-/* ------------------ GP PARSER ------------------ */
-function parseQty(input) {
-    if (!input) return 1;
-    const n = parseInt(input);
-    return isNaN(n) || n <= 0 ? 1 : n;
-}
-
 /* ------------------ COMMAND ------------------ */
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('flip')
-        .setDescription('🔥 Ultimate OSRS flip analyzer')
+        .setDescription('🔥 Ultimate OSRS flip analyzer (no utils)')
         .addStringOption(option =>
             option.setName('item')
                 .setDescription('Item name')
@@ -71,7 +127,7 @@ module.exports = {
         )
         .addIntegerOption(option =>
             option.setName('qty')
-                .setDescription('Quantity (default = 1)')
+                .setDescription('Quantity')
         ),
 
     /* ------------------ AUTOCOMPLETE ------------------ */
@@ -103,7 +159,7 @@ module.exports = {
             await interaction.deferReply();
 
             const input = interaction.options.getString('item');
-            const qty = parseQty(interaction.options.getInteger('qty'));
+            const qty = interaction.options.getInteger('qty') || 1;
 
             const items = cache.getItems();
             const prices = cache.getPrices();
@@ -137,28 +193,26 @@ module.exports = {
             const profitEach = margin;
             const profitInv = margin * 28;
             const profitTotal = margin * qty;
-            const profitCycle = margin * 100;
 
             const embed = new EmbedBuilder()
                 .setColor(signal.color)
-                .setTitle(`📊 ${item.name} — Ultimate Flip Analysis`)
+                .setTitle(`📊 ${item.name} — Flip Analysis`)
                 .addFields(
                     { name: "📈 Buy", value: `${buy.toLocaleString()} gp`, inline: true },
                     { name: "📉 Sell", value: `${sell.toLocaleString()} gp`, inline: true },
                     { name: "💰 Margin", value: `${margin.toLocaleString()} gp`, inline: true },
 
                     { name: "📊 Margin %", value: `${percent.toFixed(2)}%`, inline: true },
-                    { name: "🧠 AI Score", value: `${score}/100`, inline: true },
+                    { name: "🧠 Score", value: `${score}/100`, inline: true },
                     { name: "🚦 Signal", value: signal.label },
 
-                    { name: "🪙 Profit (x1)", value: `${profitEach.toLocaleString()} gp`, inline: true },
-                    { name: "🎒 Profit (x28)", value: `${profitInv.toLocaleString()} gp`, inline: true },
+                    { name: "🪙 x1 Profit", value: `${profitEach.toLocaleString()} gp`, inline: true },
+                    { name: "🎒 x28 Profit", value: `${profitInv.toLocaleString()} gp`, inline: true },
                     { name: "📦 Your Qty", value: `${profitTotal.toLocaleString()} gp`, inline: true },
 
-                    { name: "⚡ GE Cycle Est.", value: `${profitCycle.toLocaleString()} gp`, inline: true },
                     { name: "🏆 Tier", value: `**${tier}**` }
                 )
-                .setFooter({ text: "TFTP Ultimate Flip Engine" })
+                .setFooter({ text: "TFTP Flip Engine" })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [embed] });
